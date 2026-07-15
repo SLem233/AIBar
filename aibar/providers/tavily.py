@@ -61,8 +61,11 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
     plan_limit = account.get("plan_limit", account.get("limit"))
     percent = _percent(plan_used, plan_limit)
     if percent is not None:
-        snap.windows.append(RateWindow("Месяц (план)", percent))
-        snap.extra["Кредиты"] = f"{plan_used:g} / {plan_limit:g}"
+        snap.windows.append(RateWindow("Бесплатные (месяц)", percent))
+        snap.extra["Кредиты"] = f"{float(plan_used):g} / {float(plan_limit):g}"
+        overage = float(plan_used) - float(plan_limit)
+        if overage > 0:  # pay-as-you-go beyond the free tier
+            snap.extra["Сверх бесплатных"] = f"{overage:g} кредитов (платно)"
 
     key_percent = _percent(key_info.get("usage"), key_info.get("limit"))
     if key_percent is not None:
