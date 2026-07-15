@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIBar — справка</title>
+<style>
+  :root {
+    --page: #0d0d0d; --surface: #1a1a19; --border: rgba(255,255,255,0.10);
+    --text: #ffffff; --text2: #c3c2b7; --muted: #898781;
+    --session: #3987e5; --weekly: #d95926;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --page: #f9f9f7; --surface: #fcfcfb; --border: rgba(11,11,11,0.10);
+      --text: #0b0b0b; --text2: #52514e; --muted: #898781;
+      --session: #2a78d6; --weekly: #eb6834;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 16px; background: var(--page); color: var(--text2);
+    font: 15px/1.55 "Segoe UI", system-ui, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; }
+  h1, h2, h3 { color: var(--text); line-height: 1.25; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 32px 0 10px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  section {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 20px; margin-bottom: 14px;
+  }
+  section h2 { margin-top: 4px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--text); font-weight: 600; }
+  td:first-child { color: var(--text); white-space: nowrap; }
+  code {
+    background: var(--page); border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 5px; font-family: Consolas, monospace; font-size: 13px;
+  }
+  ul { padding-left: 22px; margin: 8px 0; }
+  li { margin: 4px 0; }
+  .chip { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+  .chip.session { background: var(--session); }
+  .chip.weekly { background: var(--weekly); }
+  .muted { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>AIBar</h1>
+  <p class="sub">Дашборд лимитов AI-провайдеров для Windows — аналог CodexBar-KDE</p>
+
+  <section>
+    <h2>Что показывают кольца</h2>
+    <ul>
+      <li><span class="chip session"></span><b style="color:var(--text)">Внешнее кольцо</b> — текущая сессия (обычно окно 5 часов); её процент — в центре.</li>
+      <li><span class="chip weekly"></span><b style="color:var(--text)">Внутреннее кольцо</b> — недельный (или месячный) лимит.</li>
+    </ul>
+    <p class="muted">Иконка в трее показывает самого «загруженного» провайдера.</p>
+  </section>
+
+  <section>
+    <h2>Виджет на рабочем столе</h2>
+    <ul>
+      <li><b style="color:var(--text)">Перетаскивание</b> — зажмите левую кнопку в любом месте виджета.</li>
+      <li><b style="color:var(--text)">Размер</b> — потяните за уголок справа внизу. Позиция и размер запоминаются.</li>
+      <li><b style="color:var(--text)">Детали</b> — наведите мышь: рядом всплывёт панель с тарифом, всеми окнами лимитов и временем до сброса (значок ↺).</li>
+      <li><b style="color:var(--text)">Меню</b> — правая кнопка: обновить, настройки, справка, скрыть, выход.</li>
+      <li>Включить/выключить виджет: меню иконки в трее → «Виджет поверх окон».</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Провайдеры и авторизация</h2>
+    <table>
+      <tr><th>Провайдер</th><th>Что нужно</th></tr>
+      <tr><td>Claude</td><td>Ничего — используется токен Claude Code (<code>~/.claude</code>). Если истёк, запустите <code>claude</code>.</td></tr>
+      <tr><td>Codex</td><td>Ничего — токен codex CLI (<code>~/.codex</code>). Если истёк, запустите <code>codex</code>.</td></tr>
+      <tr><td>Cursor</td><td>Ничего — сессия установленного приложения Cursor.</td></tr>
+      <tr><td>Z.ai (zcode)</td><td>API-ключ coding-плана: z.ai → Manage API Key → Coding Plan. Вставьте в Настройках (регион Global или BigModel CN). Подхватывается и из переменной <code>Z_AI_API_KEY</code>.</td></tr>
+      <tr><td>OpenCode</td><td>Cookie <code>auth</code> с opencode.ai: DevTools (F12) → Application → Cookies → скопируйте строку <code>auth=…</code> в Настройки. Workspace определяется сам.</td></tr>
+    </table>
+    <p class="muted">AIBar только читает локальные токены и ничего не отправляет никуда, кроме официальных API провайдеров.</p>
+  </section>
+
+  <section>
+    <h2>Настройки</h2>
+    <p>Правая кнопка по виджету или иконке в трее → «Настройки…»: включение провайдеров,
+    ключи Z.ai/OpenCode, интервал опроса (1–60 мин). Файл конфигурации:
+    <code>%APPDATA%\AIBar\config.json</code>.</p>
+  </section>
+
+  <section>
+    <h2>Автозапуск и запуск</h2>
+    <ul>
+      <li>Запуск: <code>AIBar.exe</code> — двойной клик, ничего устанавливать не нужно.</li>
+      <li>Автозапуск: <code>Win+R</code> → <code>shell:startup</code> → положите туда ярлык на AIBar.exe.</li>
+      <li>Первый запуск чуть медленнее (распаковка), в диспетчере задач два процесса AIBar — это норма.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Если что-то не так</h2>
+    <ul>
+      <li><b style="color:var(--text)">⚠ в карточке</b> — текст ошибки там же: чаще всего истёкший токен (перезапустите соответствующий CLI) или нет сети.</li>
+      <li><b style="color:var(--text)">401 у Claude/Codex</b> — выполните <code>claude</code> / <code>codex</code> в терминале, токен обновится сам.</li>
+      <li><b style="color:var(--text)">Пусто у Z.ai</b> — проверьте регион (Global ↔ BigModel CN) и ключ.</li>
+    </ul>
+  </section>
+
+  <p class="muted">AIBar · Python + PySide6 · вдохновлён
+  <a href="https://github.com/EvilFreelancer/CodexBar-KDE" style="color:var(--session)">CodexBar-KDE</a> и
+  <a href="https://github.com/steipete/CodexBar" style="color:var(--session)">CodexBar</a></p>
+</main>
+</body>
+</html>
