@@ -17,7 +17,8 @@
   круговых индикаторов по провайдерам, висит поверх всех окон:
   - перетаскивается мышью за любое место;
   - размер меняется за уголок справа внизу (позиция и размер запоминаются);
-  - при наведении мыши рядом всплывает панель с расширенной информацией;
+  - при наведении мыши рядом всплывает панель с расширенной информацией
+    и кнопкой «Обновить» — тот же дашборд, что и по клику на иконку в трее;
   - правый клик — меню (обновить / настройки / справка / скрыть / выход),
     включается и выключается из меню трея («Виджет поверх окон»).
 - **Справка** — пункт «Справка» в меню виджета и трея открывает встроенную
@@ -77,7 +78,8 @@ pyinstaller --noconfirm --clean --onefile --windowed --name AIBar --icon assets\
 
 ### Автозапуск
 
-Скопировать ярлык на `AIBar.bat` в папку автозагрузки: `Win+R` → `shell:startup`.
+Скопировать ярлык на `dist\AIBar.exe` (или `AIBar.bat` при запуске из
+исходников) в папку автозагрузки: `Win+R` → `shell:startup`.
 
 ## Настройки
 
@@ -92,7 +94,10 @@ pyinstaller --noconfirm --clean --onefile --windowed --name AIBar --icon assets\
   "zai_api_key": "",
   "zai_region": "global",
   "opencode_cookie": "",
-  "opencode_workspace": ""
+  "opencode_workspace": "",
+  "openai_admin_key": "",
+  "openai_budget_usd": 0,
+  "tavily_api_key": ""
 }
 ```
 
@@ -113,7 +118,9 @@ aibar/
 │   ├── codex.py       # Codex (ChatGPT backend) usage
 │   ├── cursor.py      # Cursor (usage-summary)
 │   ├── zai.py         # Z.ai coding plan (zcode)
-│   └── opencode.py    # OpenCode (opencode.ai)
+│   ├── opencode.py    # OpenCode (opencode.ai)
+│   ├── openai_api.py  # OpenAI API (расход за месяц, Costs API)
+│   └── tavily.py      # Tavily (кредиты плана)
 └── ui/
     ├── gauge.py       # радиальный многокольцевой индикатор (QPainter)
     ├── dashboard.py   # всплывающее окно с карточками
@@ -123,6 +130,7 @@ aibar/
 
 ## Как добавить провайдера
 
-1. Создать `aibar/providers/<name>.py` с функцией `fetch() -> ProviderSnapshot`.
-2. Зарегистрировать её в `PROVIDERS` в `aibar/providers/__init__.py`.
-3. Добавить имя в `providers` в конфиге.
+1. Создать `aibar/providers/<name>.py` с функцией `fetch(cfg: dict) -> ProviderSnapshot`.
+2. Зарегистрировать её в `PROVIDERS` (и подсказку в `PROVIDER_HINTS`) в
+   `aibar/providers/__init__.py`.
+3. Включить провайдера в диалоге «Настройки…».
