@@ -40,6 +40,21 @@ class RadialGauge(QWidget):
         gap = max(2.0, side * 0.03)
 
         inset = ring_width / 2
+        if not self._percents:
+            # placeholder for spend-only providers: bare track ring, muted dash
+            rect = QRectF(x0 + inset, y0 + inset, side - 2 * inset, side - 2 * inset)
+            pen = QPen(QColor(theme.TRACK), ring_width)
+            pen.setCapStyle(Qt.FlatCap)
+            painter.setPen(pen)
+            painter.drawArc(rect, 0, 360 * 16)
+            painter.setPen(QColor(theme.TEXT_MUTED))
+            font = QFont(theme.FONT_FAMILY, max(7, int(side * 0.16)))
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(QRectF(x0, y0, side, side), Qt.AlignCenter, "—")
+            painter.end()
+            return
+
         for i, percent in enumerate(self._percents):
             offset = inset + i * (ring_width + gap)
             rect = QRectF(

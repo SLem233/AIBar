@@ -82,7 +82,10 @@
       <tr><td>Cursor</td><td>Ничего — сессия установленного приложения Cursor.</td></tr>
       <tr><td>Z.ai (zcode)</td><td>API-ключ coding-плана: z.ai → Manage API Key → Coding Plan. Вставьте в Настройках (регион Global или BigModel CN). Подхватывается и из переменной <code>Z_AI_API_KEY</code>.</td></tr>
       <tr><td>OpenCode</td><td>Cookie <code>auth</code> с opencode.ai: DevTools (F12) → Application → Cookies → скопируйте строку <code>auth=…</code> в Настройки. Workspace определяется сам.</td></tr>
+      <tr><td>OpenAI API</td><td><b style="color:var(--text)">Admin-ключ</b> (platform.openai.com → Settings → Organization → Admin keys). Обычный ключ проекта не подойдёт. Показывает расход за месяц; если задать в Настройках бюджет $/мес — появится кольцо с процентом.</td></tr>
+      <tr><td>Tavily</td><td>Обычный API-ключ <code>tvly-…</code> — квота кредитов плана за месяц. Подхватывается и из <code>TAVILY_API_KEY</code>.</td></tr>
     </table>
+    <p class="muted">Serper.dev не даёт API для проверки баланса — его мониторить нельзя (только вручную в их дашборде).</p>
     <p class="muted">AIBar только читает локальные токены и ничего не отправляет никуда, кроме официальных API провайдеров.</p>
   </section>
 

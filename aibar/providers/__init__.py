@@ -1,4 +1,4 @@
-from . import claude, codex, cursor, opencode, zai
+from . import claude, codex, cursor, opencode, openai_api, tavily, zai
 from .base import ProviderSnapshot, RateWindow
 
 # Registry of available providers: name -> fetch(cfg) callable.
@@ -9,6 +9,8 @@ PROVIDERS = {
     "Cursor": cursor.fetch,
     "Z.ai": zai.fetch,
     "OpenCode": opencode.fetch,
+    "OpenAI API": openai_api.fetch,
+    "Tavily": tavily.fetch,
 }
 
 # Short hints shown in the settings dialog
@@ -18,6 +20,8 @@ PROVIDER_HINTS = {
     "Cursor": "сессия приложения Cursor",
     "Z.ai": "API-ключ coding-плана (zcode)",
     "OpenCode": "cookie с opencode.ai",
+    "OpenAI API": "Admin-ключ, расход за месяц",
+    "Tavily": "API-ключ tvly-…",
 }
 
 __all__ = ["PROVIDERS", "PROVIDER_HINTS", "ProviderSnapshot", "RateWindow"]

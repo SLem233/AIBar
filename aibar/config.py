@@ -16,6 +16,9 @@ DEFAULTS = {
     "zai_region": "global",  # global | bigmodel-cn
     "opencode_cookie": "",
     "opencode_workspace": "",
+    "openai_admin_key": "",
+    "openai_budget_usd": 0,  # 0 = ring off, show spend only
+    "tavily_api_key": "",
 }
 
 

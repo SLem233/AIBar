@@ -246,6 +246,8 @@ class AIBarApp:
                 parts = [
                     f"{w.label} {w.used_percent:.0f}%" for w in snap.windows[:2]
                 ]
+                if not parts:  # spend-only providers (e.g. OpenAI without budget)
+                    parts = [f"{k}: {v}" for k, v in list(snap.extra.items())[:1]]
                 tooltip_lines.append(f"{snap.provider}: {', '.join(parts)}")
         self.tray.setToolTip("AIBar\n" + "\n".join(tooltip_lines))
 
