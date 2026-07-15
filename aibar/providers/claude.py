@@ -6,7 +6,6 @@ The token is refreshed by Claude Code itself; we never write the file.
 """
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -47,11 +46,8 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
         snap.error = str(exc)
         return snap
 
-    expires_at = oauth.get("expiresAt")
-    if expires_at and expires_at / 1000 < datetime.now(timezone.utc).timestamp():
-        snap.error = "Токен Claude истёк — запустите claude, чтобы обновить"
-        return snap
-
+    # Do not fail on a locally expired expiresAt: the file may be stale while
+    # the token still works — let the API decide (it returns 401 if it's dead).
     snap.plan = (oauth.get("subscriptionType") or "").capitalize()
 
     try:
@@ -70,7 +66,12 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
         return snap
 
     if resp.status_code == 401:
-        snap.error = "401 — запустите claude для повторной авторизации"
+        # Claude Code refreshes the token lazily — on the first real API call,
+        # not at startup, so just opening a session is not enough.
+        snap.error = (
+            "Токен истёк — запустите claude и отправьте любой запрос, "
+            "токен обновится сам"
+        )
         return snap
     if resp.status_code != 200:
         snap.error = f"HTTP {resp.status_code}"
