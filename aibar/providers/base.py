@@ -73,6 +73,14 @@ def parse_unix(value: int | float | None) -> datetime | None:
         return None
 
 
+def looks_like_api_key(value: str) -> bool:
+    """True if the value could be an API key: one line of printable ASCII."""
+    return (
+        len(value) >= 8
+        and all(33 <= ord(c) <= 126 for c in value)
+    )
+
+
 def decode_jwt_payload(token: str) -> dict:
     """Decode a JWT payload without verifying the signature."""
     parts = token.split(".")

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 import requests
 
-from .base import ProviderSnapshot, RateWindow
+from .base import ProviderSnapshot, RateWindow, looks_like_api_key
 
 COSTS_URL = "https://api.openai.com/v1/organization/costs"
 
@@ -32,6 +32,9 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
     key = (cfg.get("openai_admin_key") or "").strip()
     if not key:
         snap.error = "Укажите Admin-ключ OpenAI в настройках (Settings → Admin keys)"
+        return snap
+    if not looks_like_api_key(key):
+        snap.error = "В поле ключа вставлен не ключ — вставьте sk-admin-… заново"
         return snap
 
     now = datetime.now(timezone.utc)

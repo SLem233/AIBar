@@ -9,7 +9,7 @@ import os
 
 import requests
 
-from .base import ProviderSnapshot, RateWindow
+from .base import ProviderSnapshot, RateWindow, looks_like_api_key
 
 USAGE_URL = "https://api.tavily.com/usage"
 
@@ -32,6 +32,9 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
     ).strip()
     if not key:
         snap.error = "Укажите API-ключ Tavily в настройках (или TAVILY_API_KEY)"
+        return snap
+    if not looks_like_api_key(key):
+        snap.error = "В поле ключа вставлен не ключ — вставьте tvly-… заново"
         return snap
 
     try:

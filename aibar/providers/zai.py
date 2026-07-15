@@ -9,7 +9,7 @@ import os
 
 import requests
 
-from .base import ProviderSnapshot, RateWindow, parse_unix
+from .base import ProviderSnapshot, RateWindow, looks_like_api_key, parse_unix
 
 HOSTS = {
     "global": "https://api.z.ai",
@@ -70,6 +70,9 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
     key = _api_key(cfg)
     if not key:
         snap.error = "Укажите API-ключ Z.ai в настройках (или Z_AI_API_KEY)"
+        return snap
+    if not looks_like_api_key(key):
+        snap.error = "В поле ключа вставлен не ключ — вставьте ключ Z.ai заново"
         return snap
 
     host = HOSTS.get(cfg.get("zai_region", "global"), HOSTS["global"])
