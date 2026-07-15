@@ -6,7 +6,6 @@ Key sources: settings (config.json) or the Z_AI_API_KEY / ZAI_API_KEY env vars.
 """
 
 import os
-from datetime import datetime, timezone
 
 import requests
 
@@ -28,15 +27,41 @@ def _api_key(cfg: dict) -> str | None:
     )
 
 
-def _window_label(resets_at, index: int) -> str:
-    if resets_at is not None:
-        hours = (resets_at - datetime.now(timezone.utc)).total_seconds() / 3600
-        if hours <= 26:
-            return "Сессия"
-        if hours <= 8 * 24:
+# unit codes from the z.ai API (via CodexBar): 1=days, 3=hours, 5=minutes, 6=weeks
+UNIT_MINUTES = {1: 24 * 60, 3: 60, 5: 1, 6: 7 * 24 * 60}
+
+
+def _window_minutes(raw: dict) -> int | None:
+    number = raw.get("number") or 0
+    factor = UNIT_MINUTES.get(raw.get("unit"))
+    return number * factor if number > 0 and factor else None
+
+
+def _used_percent(raw: dict) -> float | None:
+    """Prefer used/limit over the API's rounded `percentage` field."""
+    limit = raw.get("usage")  # yes: `usage` is the quota total in this API
+    if limit and limit > 0:
+        used = None
+        if raw.get("remaining") is not None:
+            used = limit - raw["remaining"]
+            if raw.get("currentValue") is not None:
+                used = max(used, raw["currentValue"])
+        elif raw.get("currentValue") is not None:
+            used = raw["currentValue"]
+        if used is not None:
+            return max(0.0, min(100.0, used / limit * 100))
+    percentage = raw.get("percentage")
+    return float(percentage) if percentage is not None else None
+
+
+def _token_label(minutes: int | None) -> str:
+    if minutes:
+        if minutes <= 26 * 60:
+            return f"Сессия ({minutes // 60}ч)"
+        if minutes <= 9 * 24 * 60:
             return "Неделя"
         return "Месяц"
-    return f"Лимит {index + 1}"
+    return "Токены"
 
 
 def fetch(cfg: dict | None = None) -> ProviderSnapshot:
@@ -76,23 +101,28 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
     data = body.get("data") or {}
     snap.plan = data.get("planName") or data.get("plan") or ""
 
-    entries = []
+    token_limits = []
+    tools_limit = None  # TIME_LIMIT: monthly Web Search / Reader / Zread quota
     for raw in data.get("limits") or []:
-        percentage = raw.get("percentage")
-        if percentage is None:
-            # derive from usage/remaining when the API omits the percent
-            limit_value = raw.get("usage")
-            remaining = raw.get("remaining")
-            if limit_value and remaining is not None:
-                percentage = max(0, min(100, (limit_value - remaining) / limit_value * 100))
-            else:
-                continue
-        entries.append((float(percentage), parse_unix((raw.get("nextResetTime") or 0) / 1000 or None)))
+        percent = _used_percent(raw)
+        if percent is None:
+            continue
+        resets_at = parse_unix((raw.get("nextResetTime") or 0) / 1000 or None)
+        if raw.get("type") == "TOKENS_LIMIT":
+            token_limits.append((_window_minutes(raw), percent, resets_at))
+        else:
+            tools_limit = (percent, resets_at)
 
-    entries.sort(key=lambda e: e[1] or datetime.max.replace(tzinfo=timezone.utc))
-    for i, (percentage, resets_at) in enumerate(entries):
+    # Shortest token window first (session — shown in the gauge center),
+    # then the longer one; the tools quota goes last, never primary.
+    token_limits.sort(key=lambda e: e[0] if e[0] is not None else 10**9)
+    for minutes, percent, resets_at in token_limits:
         snap.windows.append(
-            RateWindow(_window_label(resets_at, i), percentage, resets_at=resets_at)
+            RateWindow(_token_label(minutes), percent, resets_at=resets_at)
+        )
+    if tools_limit is not None:
+        snap.windows.append(
+            RateWindow("Инструменты (мес.)", tools_limit[0], resets_at=tools_limit[1])
         )
 
     if not snap.windows:
