@@ -9,8 +9,10 @@ from datetime import datetime
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QPainter
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QLabel,
     QMenu,
+    QPushButton,
     QSizeGrip,
     QVBoxLayout,
     QWidget,
@@ -28,6 +30,7 @@ class HoverPanel(QWidget):
     """Extended info shown while the mouse is over the widget (or the panel)."""
 
     hover_changed = Signal(bool)
+    refresh_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -45,7 +48,16 @@ class HoverPanel(QWidget):
             }}
             #cardTitle {{ color: {theme.TEXT_PRIMARY}; font-size: 15px; font-weight: 600; }}
             #cardPlan {{ color: {theme.TEXT_MUTED}; font-size: 12px; }}
+            #header {{ color: {theme.TEXT_PRIMARY}; font-size: 14px; font-weight: 600; }}
             #footer {{ color: {theme.TEXT_MUTED}; font-size: 11px; }}
+            QPushButton {{
+                background: {theme.SURFACE};
+                color: {theme.TEXT_SECONDARY};
+                border: 1px solid {theme.BORDER};
+                border-radius: 6px;
+                padding: 4px 10px;
+            }}
+            QPushButton:hover {{ color: {theme.TEXT_PRIMARY}; border-color: {theme.TEXT_MUTED}; }}
             """
         )
         self._cards: dict[str, ProviderCard] = {}
@@ -54,9 +66,19 @@ class HoverPanel(QWidget):
         self.footer = QLabel("")
         self.footer.setObjectName("footer")
 
+        header = QLabel("Лимиты AI-провайдеров")
+        header.setObjectName("header")
+        self.refresh_btn = QPushButton("Обновить")
+        self.refresh_btn.clicked.connect(self.refresh_requested)
+        top = QHBoxLayout()
+        top.addWidget(header)
+        top.addStretch()
+        top.addWidget(self.refresh_btn)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 8)
         layout.setSpacing(8)
+        layout.addLayout(top)
         layout.addLayout(self.cards_layout)
         layout.addWidget(self.footer)
 
@@ -153,6 +175,7 @@ class DesktopWidget(QWidget):
 
         self.panel = HoverPanel()
         self.panel.hover_changed.connect(self._on_panel_hover)
+        self.panel.refresh_requested.connect(self.refresh_requested)
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
         self._hide_timer.setInterval(350)
