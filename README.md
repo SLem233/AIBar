@@ -4,6 +4,9 @@
 иконка в системном трее с радиальным индикатором квот + всплывающий дашборд
 с карточками провайдеров.
 
+Репозиторий: **https://github.com/SLem233/AIBar** · готовый exe —
+в [Releases](https://github.com/SLem233/AIBar/releases).
+
 ![Дашборд](docs/dashboard.png)
 
 ## Что показывает

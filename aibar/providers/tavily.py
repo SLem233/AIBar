@@ -70,6 +70,10 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
         if overage > 0:  # pay-as-you-go beyond the free tier
             snap.extra["Сверх бесплатных"] = f"{overage:g} кредитов (платно)"
 
+    paygo_used, paygo_limit = account.get("paygo_usage"), account.get("paygo_limit")
+    if paygo_limit:
+        snap.extra["PAYG"] = f"{float(paygo_used or 0):g} / {float(paygo_limit):g}"
+
     key_percent = _percent(key_info.get("usage"), key_info.get("limit"))
     if key_percent is not None:
         snap.windows.append(RateWindow("Этот ключ", key_percent))

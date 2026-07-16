@@ -98,6 +98,13 @@ class SettingsDialog(QDialog):
         self.tavily_key = QLineEdit(cfg.get("tavily_api_key") or "")
         self.tavily_key.setEchoMode(QLineEdit.Password)
         self.tavily_key.setPlaceholderText("tvly-…")
+        self.claude_billing_day = QSpinBox()
+        self.claude_billing_day.setRange(0, 31)
+        self.claude_billing_day.setSpecialValueText("не задан")
+        self.claude_billing_day.setToolTip(
+            "День месяца, когда списывается оплата Claude — API эту дату не отдаёт"
+        )
+        self.claude_billing_day.setValue(int(cfg.get("claude_billing_day") or 0))
         keys_layout.addRow("Z.ai API-ключ:", self.zai_key)
         keys_layout.addRow("Z.ai регион:", self.zai_region)
         keys_layout.addRow("OpenCode cookie:", self.opencode_cookie)
@@ -105,6 +112,7 @@ class SettingsDialog(QDialog):
         keys_layout.addRow("OpenAI Admin-ключ:", self.openai_key)
         keys_layout.addRow("OpenAI бюджет/мес:", self.openai_budget)
         keys_layout.addRow("Tavily API-ключ:", self.tavily_key)
+        keys_layout.addRow("Claude: день оплаты:", self.claude_billing_day)
 
         misc_box = QGroupBox("Обновление")
         misc_layout = QFormLayout(misc_box)
@@ -141,5 +149,6 @@ class SettingsDialog(QDialog):
         cfg["openai_admin_key"] = self.openai_key.text().strip()
         cfg["openai_budget_usd"] = self.openai_budget.value()
         cfg["tavily_api_key"] = self.tavily_key.text().strip()
+        cfg["claude_billing_day"] = self.claude_billing_day.value()
         cfg["refresh_seconds"] = self.interval.value() * 60
         return cfg

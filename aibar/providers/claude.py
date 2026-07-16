@@ -6,13 +6,21 @@ The token is refreshed by Claude Code itself; we never write the file.
 """
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
 
-from .base import ProviderSnapshot, RateWindow, parse_iso8601
+from .base import (
+    ProviderSnapshot,
+    RateWindow,
+    format_date,
+    next_monthly_anniversary,
+    parse_iso8601,
+)
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
 BETA_HEADER = "oauth-2025-04-20"
 USER_AGENT = "claude-code/2.1.0"
 
@@ -99,4 +107,31 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
 
     if not snap.windows:
         snap.error = "API не вернул ни одного окна лимитов"
+
+    _apply_profile(snap, headers=resp.request.headers)
+
+    # The API exposes no renewal date (subscription_created_at is not the
+    # billing anchor after plan changes), so the billing day comes from
+    # settings when the user provides it.
+    billing_day = int((cfg or {}).get("claude_billing_day") or 0)
+    if 1 <= billing_day <= 31:
+        anchor = datetime(2000, 1, billing_day, tzinfo=timezone.utc)
+        snap.extra["Продление"] = format_date(next_monthly_anniversary(anchor))
     return snap
+
+
+def _apply_profile(snap: ProviderSnapshot, headers) -> None:
+    """Exact plan tier (e.g. Max 5x) and subscription status from the profile."""
+    try:
+        resp = requests.get(PROFILE_URL, headers=dict(headers), timeout=15)
+        if resp.status_code != 200:
+            return
+        org = resp.json().get("organization") or {}
+    except (requests.RequestException, ValueError):
+        return
+
+    tier = org.get("rate_limit_tier") or ""  # e.g. default_claude_max_5x
+    if "max_" in tier:
+        snap.plan = "Max " + tier.rsplit("_", 1)[-1]
+    if org.get("subscription_status") and org["subscription_status"] != "active":
+        snap.extra["Статус подписки"] = org["subscription_status"]

@@ -102,7 +102,9 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
         return snap
 
     data = body.get("data") or {}
-    snap.plan = data.get("planName") or data.get("plan") or ""
+    snap.plan = str(
+        data.get("planName") or data.get("plan") or data.get("level") or ""
+    ).capitalize()
 
     token_limits = []
     tools_limit = None  # TIME_LIMIT: monthly Web Search / Reader / Zread quota

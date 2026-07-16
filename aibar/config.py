@@ -19,12 +19,14 @@ DEFAULTS = {
     "openai_admin_key": "",
     "openai_budget_usd": 0,  # 0 = ring off, show spend only
     "tavily_api_key": "",
+    "claude_billing_day": 0,  # day of month Claude bills; 0 = don't show
 }
 
 
 def load() -> dict:
     try:
-        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        # utf-8-sig: tolerate a BOM if the file was edited by external tools
+        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
     except (FileNotFoundError, json.JSONDecodeError):
         return dict(DEFAULTS)
     return {**DEFAULTS, **data}

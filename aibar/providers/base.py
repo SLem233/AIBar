@@ -73,6 +73,25 @@ def parse_unix(value: int | float | None) -> datetime | None:
         return None
 
 
+def format_date(dt: datetime | None) -> str:
+    return dt.astimezone().strftime("%d.%m.%Y") if dt else ""
+
+
+def next_monthly_anniversary(anchor: datetime, now: datetime | None = None) -> datetime:
+    """Next monthly recurrence of the anchor's day-of-month (billing day)."""
+    now = now or datetime.now(timezone.utc)
+    year, month = now.year, now.month
+    for _ in range(3):
+        day = min(anchor.day, [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1])
+        candidate = now.replace(year=year, month=month, day=day, hour=anchor.hour, minute=anchor.minute, second=0, microsecond=0)
+        if candidate > now:
+            return candidate
+        month += 1
+        if month > 12:
+            month, year = 1, year + 1
+    return candidate
+
+
 def looks_like_api_key(value: str) -> bool:
     """True if the value could be an API key: one line of printable ASCII."""
     return (

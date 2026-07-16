@@ -5,34 +5,26 @@ polls GET https://chatgpt.com/backend-api/wham/usage, the same endpoint
 CodexBar uses. Tokens are refreshed by codex itself; we never write the file.
 """
 
-import base64
 import json
 from pathlib import Path
 
 import requests
 
-from .base import ProviderSnapshot, RateWindow, parse_unix
+from .base import ProviderSnapshot, RateWindow, decode_jwt_payload, format_date, parse_iso8601, parse_unix
 
 USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 
 AUTH_PATH = Path.home() / ".codex" / "auth.json"
 
 
+def _auth_claims(tokens: dict) -> dict:
+    return decode_jwt_payload(tokens.get("id_token") or "").get(
+        "https://api.openai.com/auth"
+    ) or {}
+
+
 def _account_id(tokens: dict) -> str | None:
-    if tokens.get("account_id"):
-        return tokens["account_id"]
-    # Fall back to the chatgpt_account_id claim inside the id_token JWT
-    id_token = tokens.get("id_token")
-    if not id_token or id_token.count(".") != 2:
-        return None
-    payload = id_token.split(".")[1]
-    payload += "=" * (-len(payload) % 4)
-    try:
-        claims = json.loads(base64.urlsafe_b64decode(payload))
-    except (ValueError, json.JSONDecodeError):
-        return None
-    auth_claims = claims.get("https://api.openai.com/auth") or {}
-    return auth_claims.get("chatgpt_account_id")
+    return tokens.get("account_id") or _auth_claims(tokens).get("chatgpt_account_id")
 
 
 def _window_label(window: dict, fallback: str) -> str:
@@ -99,6 +91,13 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
                 resets_at=parse_unix(window.get("reset_at")),
             )
         )
+
+    # Subscription period end lives in the id_token JWT, refreshed by codex CLI
+    active_until = parse_iso8601(
+        _auth_claims(tokens).get("chatgpt_subscription_active_until")
+    )
+    if active_until:
+        snap.extra["Подписка до"] = format_date(active_until)
 
     credits = data.get("credits") or {}
     if credits.get("unlimited"):
