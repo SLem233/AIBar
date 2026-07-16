@@ -100,9 +100,16 @@ pyinstaller --noconfirm --clean --onefile --windowed --name AIBar --icon assets\
   "opencode_workspace": "",
   "openai_admin_key": "",
   "openai_budget_usd": 0,
-  "tavily_api_key": ""
+  "tavily_api_key": "",
+  "claude_billing_day": 0,
+  "zai_billing_day": 0,
+  "tavily_billing_day": 0
 }
 ```
+
+`*_billing_day` — день месяца, когда списывается оплата (эти API не отдают
+дату продления); задаёт строку «Продление» в карточке, 0 — не показывать.
+У Codex и Cursor дата продления берётся из API автоматически.
 
 Всё это редактируется через диалог «Настройки…» — руками файл трогать не нужно.
 

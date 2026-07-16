@@ -9,7 +9,12 @@ import os
 
 import requests
 
-from .base import ProviderSnapshot, RateWindow, looks_like_api_key
+from .base import (
+    ProviderSnapshot,
+    RateWindow,
+    billing_renewal_date,
+    looks_like_api_key,
+)
 
 USAGE_URL = "https://api.tavily.com/usage"
 
@@ -79,6 +84,10 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
         snap.windows.append(RateWindow("Этот ключ", key_percent))
     elif key_info.get("usage") is not None and not snap.extra:
         snap.extra["Использовано ключом"] = f"{key_info['usage']:g}"
+
+    renewal = billing_renewal_date(cfg, "tavily_billing_day")
+    if renewal:
+        snap.extra["Продление"] = renewal
 
     if not snap.windows and not snap.extra:
         snap.error = "API не вернул данных об использовании"

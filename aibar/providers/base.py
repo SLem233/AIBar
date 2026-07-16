@@ -92,6 +92,21 @@ def next_monthly_anniversary(anchor: datetime, now: datetime | None = None) -> d
     return candidate
 
 
+def billing_renewal_date(cfg: dict | None, key: str) -> str:
+    """Next billing date from a user-set day-of-month setting ('' if unset).
+
+    Providers whose APIs expose no billing anchor rely on this.
+    """
+    try:
+        day = int((cfg or {}).get(key) or 0)
+    except (TypeError, ValueError):
+        return ""
+    if not 1 <= day <= 31:
+        return ""
+    anchor = datetime(2000, 1, day, tzinfo=timezone.utc)
+    return format_date(next_monthly_anniversary(anchor))
+
+
 def looks_like_api_key(value: str) -> bool:
     """True if the value could be an API key: one line of printable ASCII."""
     return (

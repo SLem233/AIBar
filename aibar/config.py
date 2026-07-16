@@ -19,7 +19,11 @@ DEFAULTS = {
     "openai_admin_key": "",
     "openai_budget_usd": 0,  # 0 = ring off, show spend only
     "tavily_api_key": "",
-    "claude_billing_day": 0,  # day of month Claude bills; 0 = don't show
+    # Day of month the provider bills (their APIs expose no billing anchor);
+    # 0 = don't show the renewal date
+    "claude_billing_day": 0,
+    "zai_billing_day": 0,
+    "tavily_billing_day": 0,
 }
 
 

@@ -6,7 +6,6 @@ The token is refreshed by Claude Code itself; we never write the file.
 """
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -14,8 +13,7 @@ import requests
 from .base import (
     ProviderSnapshot,
     RateWindow,
-    format_date,
-    next_monthly_anniversary,
+    billing_renewal_date,
     parse_iso8601,
 )
 
@@ -113,10 +111,9 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
     # The API exposes no renewal date (subscription_created_at is not the
     # billing anchor after plan changes), so the billing day comes from
     # settings when the user provides it.
-    billing_day = int((cfg or {}).get("claude_billing_day") or 0)
-    if 1 <= billing_day <= 31:
-        anchor = datetime(2000, 1, billing_day, tzinfo=timezone.utc)
-        snap.extra["Продление"] = format_date(next_monthly_anniversary(anchor))
+    renewal = billing_renewal_date(cfg, "claude_billing_day")
+    if renewal:
+        snap.extra["Продление"] = renewal
     return snap
 
 

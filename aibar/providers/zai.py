@@ -9,7 +9,13 @@ import os
 
 import requests
 
-from .base import ProviderSnapshot, RateWindow, looks_like_api_key, parse_unix
+from .base import (
+    ProviderSnapshot,
+    RateWindow,
+    billing_renewal_date,
+    looks_like_api_key,
+    parse_unix,
+)
 
 HOSTS = {
     "global": "https://api.z.ai",
@@ -132,4 +138,8 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
 
     if not snap.windows:
         snap.error = "API не вернул ни одного лимита"
+
+    renewal = billing_renewal_date(cfg, "zai_billing_day")
+    if renewal:
+        snap.extra["Продление"] = renewal
     return snap

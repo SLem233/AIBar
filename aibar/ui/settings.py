@@ -98,13 +98,19 @@ class SettingsDialog(QDialog):
         self.tavily_key = QLineEdit(cfg.get("tavily_api_key") or "")
         self.tavily_key.setEchoMode(QLineEdit.Password)
         self.tavily_key.setPlaceholderText("tvly-…")
-        self.claude_billing_day = QSpinBox()
-        self.claude_billing_day.setRange(0, 31)
-        self.claude_billing_day.setSpecialValueText("не задан")
-        self.claude_billing_day.setToolTip(
-            "День месяца, когда списывается оплата Claude — API эту дату не отдаёт"
-        )
-        self.claude_billing_day.setValue(int(cfg.get("claude_billing_day") or 0))
+        def billing_day_spin(key: str) -> QSpinBox:
+            spin = QSpinBox()
+            spin.setRange(0, 31)
+            spin.setSpecialValueText("не задан")
+            spin.setToolTip(
+                "День месяца, когда списывается оплата, — API эту дату не отдаёт"
+            )
+            spin.setValue(int(cfg.get(key) or 0))
+            return spin
+
+        self.claude_billing_day = billing_day_spin("claude_billing_day")
+        self.zai_billing_day = billing_day_spin("zai_billing_day")
+        self.tavily_billing_day = billing_day_spin("tavily_billing_day")
         keys_layout.addRow("Z.ai API-ключ:", self.zai_key)
         keys_layout.addRow("Z.ai регион:", self.zai_region)
         keys_layout.addRow("OpenCode cookie:", self.opencode_cookie)
@@ -113,6 +119,8 @@ class SettingsDialog(QDialog):
         keys_layout.addRow("OpenAI бюджет/мес:", self.openai_budget)
         keys_layout.addRow("Tavily API-ключ:", self.tavily_key)
         keys_layout.addRow("Claude: день оплаты:", self.claude_billing_day)
+        keys_layout.addRow("Z.ai: день оплаты:", self.zai_billing_day)
+        keys_layout.addRow("Tavily: день оплаты:", self.tavily_billing_day)
 
         misc_box = QGroupBox("Обновление")
         misc_layout = QFormLayout(misc_box)
@@ -150,5 +158,7 @@ class SettingsDialog(QDialog):
         cfg["openai_budget_usd"] = self.openai_budget.value()
         cfg["tavily_api_key"] = self.tavily_key.text().strip()
         cfg["claude_billing_day"] = self.claude_billing_day.value()
+        cfg["zai_billing_day"] = self.zai_billing_day.value()
+        cfg["tavily_billing_day"] = self.tavily_billing_day.value()
         cfg["refresh_seconds"] = self.interval.value() * 60
         return cfg
