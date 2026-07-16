@@ -12,8 +12,8 @@ import requests
 from .base import (
     ProviderSnapshot,
     RateWindow,
-    billing_renewal_date,
     looks_like_api_key,
+    subscription_renewal,
 )
 
 USAGE_URL = "https://api.tavily.com/usage"
@@ -85,7 +85,7 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
     elif key_info.get("usage") is not None and not snap.extra:
         snap.extra["Использовано ключом"] = f"{key_info['usage']:g}"
 
-    renewal = billing_renewal_date(cfg, "tavily_billing_day")
+    renewal = subscription_renewal(cfg, "tavily")
     if renewal:
         snap.extra["Продление"] = renewal
 

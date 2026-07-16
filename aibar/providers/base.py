@@ -77,34 +77,46 @@ def format_date(dt: datetime | None) -> str:
     return dt.astimezone().strftime("%d.%m.%Y") if dt else ""
 
 
-def next_monthly_anniversary(anchor: datetime, now: datetime | None = None) -> datetime:
-    """Next monthly recurrence of the anchor's day-of-month (billing day)."""
-    now = now or datetime.now(timezone.utc)
-    year, month = now.year, now.month
-    for _ in range(3):
-        day = min(anchor.day, [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1])
-        candidate = now.replace(year=year, month=month, day=day, hour=anchor.hour, minute=anchor.minute, second=0, microsecond=0)
-        if candidate > now:
-            return candidate
-        month += 1
-        if month > 12:
-            month, year = 1, year + 1
-    return candidate
+PERIOD_MONTHS = {"month": 1, "quarter": 3, "year": 12}
+
+_MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
 
-def billing_renewal_date(cfg: dict | None, key: str) -> str:
-    """Next billing date from a user-set day-of-month setting ('' if unset).
+def add_months(dt: datetime, months: int) -> datetime:
+    """Shift by whole months, clamping the day (31 Jan + 1 mo -> 28/29 Feb)."""
+    total = dt.year * 12 + (dt.month - 1) + months
+    year, month = divmod(total, 12)
+    month += 1
+    leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    max_day = 29 if month == 2 and leap else _MONTH_DAYS[month - 1]
+    return dt.replace(year=year, month=month, day=min(dt.day, max_day))
 
-    Providers whose APIs expose no billing anchor rely on this.
+
+def subscription_renewal(cfg: dict | None, prefix: str) -> str:
+    """Next renewal date from user settings ('' if unset).
+
+    For providers whose APIs expose no billing anchor: the user enters a paid
+    date (<prefix>_renewal_date) and cycle (<prefix>_renewal_period:
+    month/quarter/year); past dates roll forward by the cycle automatically.
     """
-    try:
-        day = int((cfg or {}).get(key) or 0)
-    except (TypeError, ValueError):
+    raw = str((cfg or {}).get(f"{prefix}_renewal_date") or "").strip()
+    if not raw:
         return ""
-    if not 1 <= day <= 31:
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d.%m.%y"):
+        try:
+            dt = datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+            break
+        except ValueError:
+            continue
+    else:
         return ""
-    anchor = datetime(2000, 1, day, tzinfo=timezone.utc)
-    return format_date(next_monthly_anniversary(anchor))
+    months = PERIOD_MONTHS.get((cfg or {}).get(f"{prefix}_renewal_period") or "month", 1)
+    now = datetime.now(timezone.utc)
+    for _ in range(600):  # bounded roll-forward
+        if dt >= now:
+            break
+        dt = add_months(dt, months)
+    return format_date(dt)
 
 
 def looks_like_api_key(value: str) -> bool:

@@ -8,10 +8,12 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
 
 from .. import theme
@@ -98,19 +100,29 @@ class SettingsDialog(QDialog):
         self.tavily_key = QLineEdit(cfg.get("tavily_api_key") or "")
         self.tavily_key.setEchoMode(QLineEdit.Password)
         self.tavily_key.setPlaceholderText("tvly-…")
-        def billing_day_spin(key: str) -> QSpinBox:
-            spin = QSpinBox()
-            spin.setRange(0, 31)
-            spin.setSpecialValueText("не задан")
-            spin.setToolTip(
-                "День месяца, когда списывается оплата, — API эту дату не отдаёт"
+        def renewal_row(prefix: str) -> tuple[QWidget, QLineEdit, QComboBox]:
+            date_edit = QLineEdit(cfg.get(f"{prefix}_renewal_date") or "")
+            date_edit.setPlaceholderText("дд.мм.гггг")
+            date_edit.setToolTip(
+                "Дата ближайшего продления — API её не отдаёт. "
+                "Прошедшая дата сдвигается на период автоматически."
             )
-            spin.setValue(int(cfg.get(key) or 0))
-            return spin
+            period = QComboBox()
+            for value, label in (("month", "месяц"), ("quarter", "квартал"), ("year", "год")):
+                period.addItem(label, value)
+            current = cfg.get(f"{prefix}_renewal_period") or "month"
+            period.setCurrentIndex(max(0, ["month", "quarter", "year"].index(current) if current in ("month", "quarter", "year") else 0))
+            box = QWidget()
+            row = QHBoxLayout(box)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(date_edit, stretch=1)
+            row.addWidget(period)
+            return box, date_edit, period
 
-        self.claude_billing_day = billing_day_spin("claude_billing_day")
-        self.zai_billing_day = billing_day_spin("zai_billing_day")
-        self.tavily_billing_day = billing_day_spin("tavily_billing_day")
+        claude_box, self.claude_renewal_date, self.claude_renewal_period = renewal_row("claude")
+        zai_box, self.zai_renewal_date, self.zai_renewal_period = renewal_row("zai")
+        tavily_box, self.tavily_renewal_date, self.tavily_renewal_period = renewal_row("tavily")
+        self._renewal_rows = {"claude": claude_box, "zai": zai_box, "tavily": tavily_box}
         keys_layout.addRow("Z.ai API-ключ:", self.zai_key)
         keys_layout.addRow("Z.ai регион:", self.zai_region)
         keys_layout.addRow("OpenCode cookie:", self.opencode_cookie)
@@ -118,9 +130,9 @@ class SettingsDialog(QDialog):
         keys_layout.addRow("OpenAI Admin-ключ:", self.openai_key)
         keys_layout.addRow("OpenAI бюджет/мес:", self.openai_budget)
         keys_layout.addRow("Tavily API-ключ:", self.tavily_key)
-        keys_layout.addRow("Claude: день оплаты:", self.claude_billing_day)
-        keys_layout.addRow("Z.ai: день оплаты:", self.zai_billing_day)
-        keys_layout.addRow("Tavily: день оплаты:", self.tavily_billing_day)
+        keys_layout.addRow("Claude: продление:", self._renewal_rows["claude"])
+        keys_layout.addRow("Z.ai: продление:", self._renewal_rows["zai"])
+        keys_layout.addRow("Tavily: продление:", self._renewal_rows["tavily"])
 
         misc_box = QGroupBox("Обновление")
         misc_layout = QFormLayout(misc_box)
@@ -157,8 +169,11 @@ class SettingsDialog(QDialog):
         cfg["openai_admin_key"] = self.openai_key.text().strip()
         cfg["openai_budget_usd"] = self.openai_budget.value()
         cfg["tavily_api_key"] = self.tavily_key.text().strip()
-        cfg["claude_billing_day"] = self.claude_billing_day.value()
-        cfg["zai_billing_day"] = self.zai_billing_day.value()
-        cfg["tavily_billing_day"] = self.tavily_billing_day.value()
+        cfg["claude_renewal_date"] = self.claude_renewal_date.text().strip()
+        cfg["claude_renewal_period"] = self.claude_renewal_period.currentData()
+        cfg["zai_renewal_date"] = self.zai_renewal_date.text().strip()
+        cfg["zai_renewal_period"] = self.zai_renewal_period.currentData()
+        cfg["tavily_renewal_date"] = self.tavily_renewal_date.text().strip()
+        cfg["tavily_renewal_period"] = self.tavily_renewal_period.currentData()
         cfg["refresh_seconds"] = self.interval.value() * 60
         return cfg

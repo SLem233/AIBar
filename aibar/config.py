@@ -19,12 +19,29 @@ DEFAULTS = {
     "openai_admin_key": "",
     "openai_budget_usd": 0,  # 0 = ring off, show spend only
     "tavily_api_key": "",
-    # Day of month the provider bills (their APIs expose no billing anchor);
-    # 0 = don't show the renewal date
-    "claude_billing_day": 0,
-    "zai_billing_day": 0,
-    "tavily_billing_day": 0,
+    # Renewal date (dd.mm.yyyy) + cycle for providers whose APIs expose no
+    # billing anchor; empty date = don't show. Past dates roll forward.
+    "claude_renewal_date": "",
+    "claude_renewal_period": "month",  # month | quarter | year
+    "zai_renewal_date": "",
+    "zai_renewal_period": "month",
+    "tavily_renewal_date": "",
+    "tavily_renewal_period": "month",
 }
+
+
+def _migrate(data: dict) -> dict:
+    """Convert legacy <p>_billing_day (day of month) to <p>_renewal_date."""
+    from datetime import date, timedelta
+
+    for prefix in ("claude", "zai", "tavily"):
+        day = data.pop(f"{prefix}_billing_day", 0) or 0
+        if 1 <= int(day) <= 31 and not data.get(f"{prefix}_renewal_date"):
+            candidate = date.today()
+            while candidate.day != int(day):  # next occurrence of that day
+                candidate += timedelta(days=1)
+            data[f"{prefix}_renewal_date"] = candidate.strftime("%d.%m.%Y")
+    return data
 
 
 def load() -> dict:
@@ -33,7 +50,7 @@ def load() -> dict:
         data = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
     except (FileNotFoundError, json.JSONDecodeError):
         return dict(DEFAULTS)
-    return {**DEFAULTS, **data}
+    return {**DEFAULTS, **_migrate(data)}
 
 
 def save(config: dict) -> None:

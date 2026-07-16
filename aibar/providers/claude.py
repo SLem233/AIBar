@@ -13,8 +13,8 @@ import requests
 from .base import (
     ProviderSnapshot,
     RateWindow,
-    billing_renewal_date,
     parse_iso8601,
+    subscription_renewal,
 )
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
@@ -109,9 +109,8 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
     _apply_profile(snap, headers=resp.request.headers)
 
     # The API exposes no renewal date (subscription_created_at is not the
-    # billing anchor after plan changes), so the billing day comes from
-    # settings when the user provides it.
-    renewal = billing_renewal_date(cfg, "claude_billing_day")
+    # billing anchor after plan changes), so it comes from settings.
+    renewal = subscription_renewal(cfg, "claude")
     if renewal:
         snap.extra["Продление"] = renewal
     return snap

@@ -12,9 +12,9 @@ import requests
 from .base import (
     ProviderSnapshot,
     RateWindow,
-    billing_renewal_date,
     looks_like_api_key,
     parse_unix,
+    subscription_renewal,
 )
 
 HOSTS = {
@@ -139,7 +139,7 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
     if not snap.windows:
         snap.error = "API не вернул ни одного лимита"
 
-    renewal = billing_renewal_date(cfg, "zai_billing_day")
+    renewal = subscription_renewal(cfg, "zai")
     if renewal:
         snap.extra["Продление"] = renewal
     return snap
