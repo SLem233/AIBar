@@ -92,13 +92,6 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
             )
         )
 
-    # Subscription period end lives in the id_token JWT, refreshed by codex CLI
-    active_until = parse_iso8601(
-        _auth_claims(tokens).get("chatgpt_subscription_active_until")
-    )
-    if active_until:
-        snap.extra["Подписка до"] = format_date(active_until)
-
     credits = data.get("credits") or {}
     if credits.get("unlimited"):
         snap.extra["Кредиты"] = "безлимит"
@@ -107,6 +100,13 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
             snap.extra["Кредиты"] = f"{float(credits['balance']):g}"
         except (TypeError, ValueError):
             snap.extra["Кредиты"] = str(credits["balance"])
+
+    # Subscription period end lives in the id_token JWT, refreshed by codex CLI
+    active_until = parse_iso8601(
+        _auth_claims(tokens).get("chatgpt_subscription_active_until")
+    )
+    if active_until:
+        snap.extra["Подписка до"] = format_date(active_until)
 
     if not snap.windows:
         snap.error = "API не вернул ни одного окна лимитов"
