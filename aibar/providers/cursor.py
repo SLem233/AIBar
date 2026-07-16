@@ -12,7 +12,13 @@ from pathlib import Path
 
 import requests
 
-from .base import ProviderSnapshot, RateWindow, decode_jwt_payload, format_date, parse_iso8601
+from .base import (
+    ProviderSnapshot,
+    RateWindow,
+    decode_jwt_payload,
+    parse_iso8601,
+    subscription_renewal,
+)
 
 USAGE_SUMMARY_URL = "https://cursor.com/api/usage-summary"
 
@@ -111,8 +117,12 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
 
     if limit:
         snap.extra["Включено в тариф"] = f"{_usd(used)} / {_usd(limit)}"
-    if resets_at:
-        snap.extra["Продление"] = format_date(resets_at)
+    # billingCycleEnd is the monthly quota cycle, not the subscription end
+    # (annual plans close $0 invoices monthly) — it stays as the ↺ countdown
+    # on the windows; the real renewal date comes from settings.
+    renewal = subscription_renewal(cfg, "cursor")
+    if renewal:
+        snap.extra["Продление"] = renewal
     on_demand = individual.get("onDemand") or {}
     if on_demand.get("enabled") and (on_demand.get("used") or on_demand.get("limit")):
         limit_text = _usd(on_demand["limit"]) if on_demand.get("limit") else "∞"

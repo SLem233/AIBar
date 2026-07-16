@@ -120,9 +120,15 @@ class SettingsDialog(QDialog):
             return box, date_edit, period
 
         claude_box, self.claude_renewal_date, self.claude_renewal_period = renewal_row("claude")
+        cursor_box, self.cursor_renewal_date, self.cursor_renewal_period = renewal_row("cursor")
         zai_box, self.zai_renewal_date, self.zai_renewal_period = renewal_row("zai")
         tavily_box, self.tavily_renewal_date, self.tavily_renewal_period = renewal_row("tavily")
-        self._renewal_rows = {"claude": claude_box, "zai": zai_box, "tavily": tavily_box}
+        self._renewal_rows = {
+            "claude": claude_box,
+            "cursor": cursor_box,
+            "zai": zai_box,
+            "tavily": tavily_box,
+        }
         keys_layout.addRow("Z.ai API-ключ:", self.zai_key)
         keys_layout.addRow("Z.ai регион:", self.zai_region)
         keys_layout.addRow("OpenCode cookie:", self.opencode_cookie)
@@ -131,6 +137,7 @@ class SettingsDialog(QDialog):
         keys_layout.addRow("OpenAI бюджет/мес:", self.openai_budget)
         keys_layout.addRow("Tavily API-ключ:", self.tavily_key)
         keys_layout.addRow("Claude: продление:", self._renewal_rows["claude"])
+        keys_layout.addRow("Cursor: продление:", self._renewal_rows["cursor"])
         keys_layout.addRow("Z.ai: продление:", self._renewal_rows["zai"])
         keys_layout.addRow("Tavily: продление:", self._renewal_rows["tavily"])
 
@@ -171,6 +178,8 @@ class SettingsDialog(QDialog):
         cfg["tavily_api_key"] = self.tavily_key.text().strip()
         cfg["claude_renewal_date"] = self.claude_renewal_date.text().strip()
         cfg["claude_renewal_period"] = self.claude_renewal_period.currentData()
+        cfg["cursor_renewal_date"] = self.cursor_renewal_date.text().strip()
+        cfg["cursor_renewal_period"] = self.cursor_renewal_period.currentData()
         cfg["zai_renewal_date"] = self.zai_renewal_date.text().strip()
         cfg["zai_renewal_period"] = self.zai_renewal_period.currentData()
         cfg["tavily_renewal_date"] = self.tavily_renewal_date.text().strip()

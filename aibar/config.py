@@ -23,6 +23,8 @@ DEFAULTS = {
     # billing anchor; empty date = don't show. Past dates roll forward.
     "claude_renewal_date": "",
     "claude_renewal_period": "month",  # month | quarter | year
+    "cursor_renewal_date": "",
+    "cursor_renewal_period": "year",
     "zai_renewal_date": "",
     "zai_renewal_period": "month",
     "tavily_renewal_date": "",

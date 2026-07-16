@@ -103,6 +103,8 @@ pyinstaller --noconfirm --clean --onefile --windowed --name AIBar --icon assets\
   "tavily_api_key": "",
   "claude_renewal_date": "08.08.2026",
   "claude_renewal_period": "month",
+  "cursor_renewal_date": "",
+  "cursor_renewal_period": "year",
   "zai_renewal_date": "",
   "zai_renewal_period": "year",
   "tavily_renewal_date": "",
@@ -113,8 +115,10 @@ pyinstaller --noconfirm --clean --onefile --windowed --name AIBar --icon assets\
 `*_renewal_date` / `*_renewal_period` — дата ближайшего продления и период
 подписки (`month` / `quarter` / `year`) для провайдеров, чьи API не отдают
 дату списания; прошедшая дата автоматически сдвигается на период вперёд.
-Пустая дата — строка «Продление» не показывается. У Codex и Cursor дата
-берётся из API автоматически.
+Пустая дата — строка «Продление» не показывается. У Codex дата берётся из
+API автоматически; у Cursor API отдаёт только конец месячного расчётного
+цикла (он показан как «↺ до сброса» у колец), а дата продления самой
+подписки задаётся здесь.
 
 Всё это редактируется через диалог «Настройки…» — руками файл трогать не нужно.
 
