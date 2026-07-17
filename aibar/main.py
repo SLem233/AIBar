@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import config, theme
 from .help import open_help
+from .update import UpdateChecker
 from .providers import PROVIDERS
 from .providers.base import ProviderSnapshot
 from .ui import DashboardWindow, DesktopWidget
@@ -129,6 +130,13 @@ class AIBarApp:
         self.timer.timeout.connect(self.poller.poll)
         self.timer.start(self.cfg["refresh_seconds"] * 1000)
         self.poller.poll()
+
+        self.update_checker = UpdateChecker()
+        self.update_checker.update_available.connect(self.widget.set_update_available)
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.update_checker.check)
+        self.update_timer.start(60 * 60 * 1000)  # hourly
+        self.update_checker.check()
 
     def _build_menu(self) -> QMenu:
         menu = QMenu()

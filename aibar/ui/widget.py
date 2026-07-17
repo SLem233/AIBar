@@ -7,8 +7,8 @@ panel with the full per-provider breakdown next to the widget.
 import time
 from datetime import datetime
 
-from PySide6.QtCore import QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QPainter
+from PySide6.QtCore import QPoint, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QPainter
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -21,10 +21,54 @@ from PySide6.QtWidgets import (
 
 from .. import theme
 from ..providers.base import ProviderSnapshot
+from ..update import RELEASES_URL
 from .dashboard import ProviderCard
 from .gauge import RadialGauge
 
 WIDGET_FLAGS = Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
+
+
+class UpdateBadge(QLabel):
+    """Clickable pill shown when a newer release is published."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignCenter)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setStyleSheet(
+            f"""
+            background: rgba(250, 178, 25, 38);
+            color: {theme.WARNING};
+            border: 1px solid {theme.WARNING};
+            border-radius: 7px;
+            padding: 2px 6px;
+            font-family: "{theme.FONT_FAMILY}";
+            font-size: 10px;
+            font-weight: 600;
+            """
+        )
+        self.hide()
+
+    def show_version(self, version: str) -> None:
+        self._version = version
+        self._relabel()
+        self.show()
+
+    def _relabel(self) -> None:
+        wide = self.parentWidget() is None or self.parentWidget().width() >= 90
+        self.setText("↓ Update available" if wide else "↓ Update")
+        self.setToolTip(
+            f"Доступна версия {getattr(self, '_version', '')} — нажмите, чтобы открыть страницу загрузки"
+        )
+
+    def relabel_for_width(self) -> None:
+        if self.isVisible():
+            self._relabel()
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            QDesktopServices.openUrl(QUrl(RELEASES_URL))
+        super().mousePressEvent(event)
 
 
 class HoverPanel(QWidget):
@@ -182,8 +226,11 @@ class DesktopWidget(QWidget):
         grip = QSizeGrip(self)
         grip.setStyleSheet("background: transparent; width: 14px; height: 14px;")
 
+        self.update_badge = UpdateBadge(self)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 2)
+        layout.addWidget(self.update_badge)
         layout.addLayout(self.tiles_layout, stretch=1)
         layout.addWidget(grip, alignment=Qt.AlignBottom | Qt.AlignRight)
 
@@ -224,6 +271,9 @@ class DesktopWidget(QWidget):
         self._activity.clear()
         self._last_solo = None
         self.panel.clear_cards()
+
+    def set_update_available(self, version: str) -> None:
+        self.update_badge.show_version(version)
 
     # ---- mini mode -------------------------------------------------------
     def set_mode(self, mode: str) -> None:
@@ -371,6 +421,7 @@ class DesktopWidget(QWidget):
 
     def resizeEvent(self, event) -> None:
         self._geometry_timer.start()
+        self.update_badge.relabel_for_width()
         super().resizeEvent(event)
 
     def hideEvent(self, event) -> None:
