@@ -12,6 +12,8 @@ DEFAULTS = {
     "providers": ["Claude", "Codex"],
     "widget_enabled": True,
     "widget_geometry": None,  # [x, y, w, h]
+    "widget_mode": "full",  # full | mini (mini: only providers near the limit)
+    "mini_threshold": 70,  # percent that qualifies a provider for mini mode
     "zai_api_key": "",
     "zai_region": "global",  # global | bigmodel-cn
     "opencode_cookie": "",

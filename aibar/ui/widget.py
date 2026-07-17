@@ -4,6 +4,7 @@ Draggable anywhere, resizable via the bottom-right grip; hovering shows a
 panel with the full per-provider breakdown next to the widget.
 """
 
+import time
 from datetime import datetime
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
@@ -140,6 +141,12 @@ class GaugeTile(QWidget):
         suffix = " ⚠" if snap.error else ""
         self.caption.setText(f"{snap.provider}{suffix}")
 
+    def resizeEvent(self, event) -> None:
+        # captions don't fit below ~60px — the tooltip still names the provider
+        self.caption.setVisible(self.width() >= 60)
+        self.setToolTip(self.caption.text() if self.width() < 60 else "")
+        super().resizeEvent(event)
+
 
 class DesktopWidget(QWidget):
     """The floating always-on-top column of gauges."""
@@ -150,17 +157,24 @@ class DesktopWidget(QWidget):
     help_requested = Signal()
     hide_requested = Signal()
     quit_requested = Signal()
+    mode_changed = Signal(str)  # "full" | "mini"
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(WIDGET_FLAGS)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setMinimumSize(90, 120)
+        self.setMinimumSize(45, 60)
         self.resize(120, 260)
 
         self._drag_offset: QPoint | None = None
         self._tiles: dict[str, GaugeTile] = {}
         self._context_menu: QMenu | None = None
+        self._snapshots: list[ProviderSnapshot] = []
+        self._mode = "full"  # full | mini
+        self._mini_threshold = 70.0
+        # (timestamp, {provider: summed window percents}) for the last 15 min
+        self._activity: list[tuple[float, dict[str, float]]] = []
+        self._last_solo: str | None = None
 
         self.tiles_layout = QVBoxLayout()
         self.tiles_layout.setSpacing(6)
@@ -196,6 +210,10 @@ class DesktopWidget(QWidget):
                 self._tiles[snap.provider] = tile
                 self.tiles_layout.addWidget(tile, stretch=1)
             tile.update_snapshot(snap)
+        self._snapshots = snapshots
+        self._record_activity(snapshots)
+        self._apply_visibility()
+        # the hover panel always shows every provider, regardless of mode
         self.panel.update_snapshots(snapshots)
 
     def clear_tiles(self) -> None:
@@ -203,7 +221,66 @@ class DesktopWidget(QWidget):
             self.tiles_layout.removeWidget(tile)
             tile.deleteLater()
         self._tiles.clear()
+        self._activity.clear()
+        self._last_solo = None
         self.panel.clear_cards()
+
+    # ---- mini mode -------------------------------------------------------
+    def set_mode(self, mode: str) -> None:
+        self._mode = mode if mode in ("full", "mini") else "full"
+        self._apply_visibility()
+
+    def set_mini_threshold(self, percent: float) -> None:
+        self._mini_threshold = percent
+        self._apply_visibility()
+
+    def _record_activity(self, snapshots: list[ProviderSnapshot], now: float | None = None) -> None:
+        now = now if now is not None else time.time()
+        usage = {
+            s.provider: sum(w.used_percent for w in s.windows)
+            for s in snapshots
+            if not s.error and s.windows
+        }
+        self._activity.append((now, usage))
+        cutoff = now - 15 * 60
+        self._activity = [(ts, u) for ts, u in self._activity if ts >= cutoff]
+
+    def _activity_delta(self) -> dict[str, float]:
+        """Positive usage growth per provider over the retained window."""
+        if len(self._activity) < 2:
+            return {}
+        _, oldest = self._activity[0]
+        _, newest = self._activity[-1]
+        return {
+            name: newest[name] - oldest[name]
+            for name in newest
+            if name in oldest and newest[name] > oldest[name]
+        }
+
+    def _visible_providers(self) -> set[str]:
+        if self._mode != "mini":
+            return set(self._tiles)
+        hot = {
+            s.provider
+            for s in self._snapshots
+            if any(w.used_percent >= self._mini_threshold for w in s.windows)
+        }
+        if hot:
+            return hot
+        # nobody is close to the limit — show the most recently active provider
+        delta = self._activity_delta()
+        if delta:
+            self._last_solo = max(delta, key=delta.get)
+        if self._last_solo not in self._tiles:
+            self._last_solo = next(iter(self._tiles), None)
+        return {self._last_solo} if self._last_solo else set()
+
+    def _apply_visibility(self) -> None:
+        if not self._tiles:
+            return
+        visible = self._visible_providers()
+        for name, tile in self._tiles.items():
+            tile.setVisible(name in visible)
 
     # ---- painting -------------------------------------------------------
     def paintEvent(self, event) -> None:
@@ -236,6 +313,11 @@ class DesktopWidget(QWidget):
         menu = QMenu(self)
         refresh = QAction("Обновить", menu)
         refresh.triggered.connect(self.refresh_requested)
+        mini = QAction("Мини-режим (только у лимита)", menu, checkable=True)
+        mini.setChecked(self._mode == "mini")
+        mini.toggled.connect(
+            lambda on: self.mode_changed.emit("mini" if on else "full")
+        )
         settings = QAction("Настройки…", menu)
         settings.triggered.connect(self.settings_requested)
         help_action = QAction("Справка", menu)
@@ -245,6 +327,7 @@ class DesktopWidget(QWidget):
         quit_action = QAction("Выход", menu)
         quit_action.triggered.connect(self.quit_requested)
         menu.addAction(refresh)
+        menu.addAction(mini)
         menu.addAction(settings)
         menu.addAction(help_action)
         menu.addAction(hide)

@@ -104,6 +104,9 @@ class AIBarApp:
         self.widget.refresh_requested.connect(self.poller.poll)
         self.widget.settings_requested.connect(self.show_settings)
         self.widget.help_requested.connect(open_help)
+        self.widget.mode_changed.connect(self.set_widget_mode)
+        self.widget.set_mini_threshold(float(self.cfg.get("mini_threshold") or 70))
+        self.widget.set_mode(self.cfg.get("widget_mode", "full"))
         self.widget.hide_requested.connect(lambda: self.set_widget_enabled(False))
         self.widget.quit_requested.connect(app.quit)
         self.widget.geometry_changed.connect(self.save_widget_geometry)
@@ -185,6 +188,11 @@ class AIBarApp:
         self.widget.clear_tiles()
         self.snapshots = []
         self.poller.poll()
+
+    def set_widget_mode(self, mode: str) -> None:
+        self.cfg["widget_mode"] = mode
+        config.save(self.cfg)
+        self.widget.set_mode(mode)
 
     def set_widget_enabled(self, enabled: bool) -> None:
         self.cfg["widget_enabled"] = enabled

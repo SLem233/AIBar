@@ -20,7 +20,7 @@ class RadialGauge(QWidget):
         super().__init__(parent)
         self._percents: list[float] = []
         if scalable:
-            self.setMinimumSize(48, 48)
+            self.setMinimumSize(22, 22)
             self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         else:
             self.setFixedSize(size, size)
