@@ -20,6 +20,10 @@ DEFAULTS = {
     "opencode_workspace": "",
     "openai_admin_key": "",
     "openai_budget_usd": 0,  # 0 = ring off, show spend only
+    # Balance anchor: the dashboard balance on a given date; the app subtracts
+    # Costs-API spend since that date (OpenAI exposes no balance endpoint)
+    "openai_balance_usd": 0,
+    "openai_balance_date": "",
     "tavily_api_key": "",
     # Renewal date (dd.mm.yyyy) + cycle for providers whose APIs expose no
     # billing anchor; empty date = don't show. Past dates roll forward.

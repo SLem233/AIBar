@@ -2,16 +2,18 @@
 
 Polls the organization Costs API: GET /v1/organization/costs. Requires an
 Admin API key (platform.openai.com -> Settings -> Organization -> Admin keys);
-regular project keys get 401. Prepaid credit balance has no public API, so the
-card shows month-to-date spend, and — when a monthly budget is set in
-settings — a percent ring against that budget.
+regular project keys get 401.
+
+The prepaid credit balance has no public API (the dashboard endpoint accepts
+only browser session keys), so the card derives it from a user-set anchor:
+"balance $X on date D" minus everything the Costs API reports since D.
 """
 
 from datetime import datetime, timezone
 
 import requests
 
-from .base import ProviderSnapshot, RateWindow, looks_like_api_key
+from .base import ProviderSnapshot, RateWindow, looks_like_api_key, parse_user_date
 
 COSTS_URL = "https://api.openai.com/v1/organization/costs"
 
@@ -24,6 +26,32 @@ def _month_bounds(now: datetime) -> tuple[datetime, datetime]:
         else start.replace(month=start.month + 1)
     )
     return start, next_month
+
+
+def _fetch_costs(key: str, since: datetime) -> list[tuple[int, float]]:
+    """Daily cost buckets [(bucket_start_unix, usd)] since the given moment."""
+    buckets: list[tuple[int, float]] = []
+    params = {"start_time": int(since.timestamp()), "bucket_width": "1d", "limit": 180}
+    for _ in range(8):  # follow pagination defensively
+        resp = requests.get(
+            COSTS_URL,
+            params=params,
+            headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            raise PermissionError(resp.status_code)
+        body = resp.json()
+        for bucket in body.get("data") or []:
+            total = sum(
+                float((r.get("amount") or {}).get("value") or 0)
+                for r in bucket.get("results") or []
+            )
+            buckets.append((int(bucket.get("start_time") or 0), total))
+        if not body.get("has_more"):
+            break
+        params["page"] = body.get("next_page")
+    return buckets
 
 
 def fetch(cfg: dict | None = None) -> ProviderSnapshot:
@@ -39,45 +67,38 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
 
     now = datetime.now(timezone.utc)
     month_start, month_end = _month_bounds(now)
+    anchor_date = parse_user_date(cfg.get("openai_balance_date") or "")
+    anchor_usd = float(cfg.get("openai_balance_usd") or 0)
 
-    spent = 0.0
-    currency = "usd"
-    params = {"start_time": int(month_start.timestamp()), "bucket_width": "1d", "limit": 31}
-    for _ in range(4):  # follow pagination defensively
-        try:
-            resp = requests.get(
-                COSTS_URL,
-                params=params,
-                headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
-                timeout=30,
-            )
-        except requests.RequestException as exc:
-            snap.error = f"Сетевая ошибка: {exc}"
-            return snap
-
-        if resp.status_code == 401:
+    since = min(month_start, anchor_date) if anchor_date else month_start
+    try:
+        buckets = _fetch_costs(key, since)
+    except PermissionError as exc:
+        code = exc.args[0]
+        if code == 401:
             snap.error = "401 — нужен именно Admin-ключ (sk-admin…), не обычный ключ проекта"
-            return snap
-        if resp.status_code != 200:
-            snap.error = f"HTTP {resp.status_code}"
-            return snap
+        else:
+            snap.error = f"HTTP {code}"
+        return snap
+    except requests.RequestException as exc:
+        snap.error = f"Сетевая ошибка: {exc}"
+        return snap
 
-        body = resp.json()
-        for bucket in body.get("data") or []:
-            for result in bucket.get("results") or []:
-                amount = result.get("amount") or {}
-                spent += float(amount.get("value") or 0)
-                currency = amount.get("currency") or currency
-        if not body.get("has_more"):
-            break
-        params["page"] = body.get("next_page")
+    month_spent = sum(usd for ts, usd in buckets if ts >= month_start.timestamp())
+    snap.extra["Расход за месяц"] = f"${month_spent:.2f}"
 
-    symbol = "$" if currency.lower() == "usd" else f" {currency.upper()}"
-    snap.extra["Расход за месяц"] = f"${spent:.2f}" if symbol == "$" else f"{spent:.2f}{symbol}"
+    if anchor_date and anchor_usd > 0:
+        spent_since_anchor = sum(
+            usd for ts, usd in buckets if ts >= anchor_date.timestamp()
+        )
+        balance = anchor_usd - spent_since_anchor
+        snap.extra["Остаток на счету"] = f"≈ ${balance:.2f}"
+        if balance < 0:
+            snap.extra["Остаток на счету"] += " (обновите якорь в настройках)"
 
     budget = float(cfg.get("openai_budget_usd") or 0)
     if budget > 0:
-        percent = min(100.0, spent / budget * 100)
+        percent = min(100.0, month_spent / budget * 100)
         snap.windows.append(RateWindow("Бюджет (месяц)", percent, resets_at=month_end))
         snap.extra["Бюджет"] = f"${budget:.2f}"
     return snap

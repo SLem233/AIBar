@@ -92,6 +92,17 @@ def add_months(dt: datetime, months: int) -> datetime:
     return dt.replace(year=year, month=month, day=min(dt.day, max_day))
 
 
+def parse_user_date(raw: str) -> datetime | None:
+    """Parse a user-entered date (dd.mm.yyyy, yyyy-mm-dd or dd.mm.yy)."""
+    raw = (raw or "").strip()
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d.%m.%y"):
+        try:
+            return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
 def subscription_renewal(cfg: dict | None, prefix: str) -> str:
     """Next renewal date from user settings ('' if unset).
 
@@ -99,16 +110,8 @@ def subscription_renewal(cfg: dict | None, prefix: str) -> str:
     date (<prefix>_renewal_date) and cycle (<prefix>_renewal_period:
     month/quarter/year); past dates roll forward by the cycle automatically.
     """
-    raw = str((cfg or {}).get(f"{prefix}_renewal_date") or "").strip()
-    if not raw:
-        return ""
-    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d.%m.%y"):
-        try:
-            dt = datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
-            break
-        except ValueError:
-            continue
-    else:
+    dt = parse_user_date(str((cfg or {}).get(f"{prefix}_renewal_date") or ""))
+    if dt is None:
         return ""
     months = PERIOD_MONTHS.get((cfg or {}).get(f"{prefix}_renewal_period") or "month", 1)
     now = datetime.now(timezone.utc)
