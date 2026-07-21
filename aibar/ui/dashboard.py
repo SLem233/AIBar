@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import theme
+from .. import __version__, theme
 from ..geoblock import PAUSED_MESSAGE
 from ..providers.base import ProviderSnapshot
 from .gauge import RadialGauge
@@ -178,7 +178,7 @@ class DashboardWindow(QWidget):
                 self.cards_layout.addWidget(card)
             card.update_snapshot(snap)
         self.footer.setText(
-            f"Обновлено {datetime.now().strftime('%H:%M:%S')}"
+            f"AIBar v{__version__} · Обновлено {datetime.now().strftime('%H:%M:%S')}"
         )
         self.adjustSize()
 

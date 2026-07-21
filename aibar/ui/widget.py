@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import theme
+from .. import __version__, theme
 from ..geoblock import PAUSED_MESSAGE
 from ..providers.base import ProviderSnapshot
 from ..update import RELEASES_URL
@@ -158,7 +158,9 @@ class HoverPanel(QWidget):
                 self._cards[snap.provider] = card
                 self.cards_layout.addWidget(card)
             card.update_snapshot(snap)
-        self.footer.setText(f"Обновлено {datetime.now().strftime('%H:%M:%S')}")
+        self.footer.setText(
+            f"AIBar v{__version__} · Обновлено {datetime.now().strftime('%H:%M:%S')}"
+        )
         self.adjustSize()
 
     def clear_cards(self) -> None:
@@ -387,6 +389,10 @@ class DesktopWidget(QWidget):
 
     def contextMenuEvent(self, event) -> None:
         menu = QMenu(self)
+        version = QAction(f"AIBar v{__version__}", menu)
+        version.setEnabled(False)
+        menu.addAction(version)
+        menu.addSeparator()
         refresh = QAction("Обновить", menu)
         refresh.triggered.connect(self.refresh_requested)
         mini = QAction("Мини-режим (только у лимита)", menu, checkable=True)

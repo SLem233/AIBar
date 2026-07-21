@@ -10,7 +10,7 @@ from PySide6.QtCore import QObject, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import config, theme
+from . import __version__, config, theme
 from .geoblock import GeoBlockGuard
 from .help import open_help
 from .polling import poll_all
@@ -115,7 +115,7 @@ class AIBarApp:
             self.widget.show()
 
         self.tray = QSystemTrayIcon(render_tray_icon(None, None))
-        self.tray.setToolTip("AIBar — загрузка…")
+        self.tray.setToolTip(f"AIBar v{__version__} — загрузка…")
         self.tray.activated.connect(self.on_tray_activated)
         self.tray.setContextMenu(self._build_menu())
         self.tray.show()
@@ -134,6 +134,10 @@ class AIBarApp:
 
     def _build_menu(self) -> QMenu:
         menu = QMenu()
+        version_action = QAction(f"AIBar v{__version__}", menu)
+        version_action.setEnabled(False)
+        menu.addAction(version_action)
+        menu.addSeparator()
         open_action = QAction("Открыть дашборд", menu)
         open_action.triggered.connect(self.show_dashboard)
         refresh_action = QAction("Обновить", menu)
@@ -261,7 +265,7 @@ class AIBarApp:
                 if not parts:  # spend-only providers (e.g. OpenAI without budget)
                     parts = [f"{k}: {v}" for k, v in list(snap.extra.items())[:1]]
                 tooltip_lines.append(f"{snap.provider}: {', '.join(parts)}")
-        self.tray.setToolTip("AIBar\n" + "\n".join(tooltip_lines))
+        self.tray.setToolTip(f"AIBar v{__version__}\n" + "\n".join(tooltip_lines))
 
 
 def main() -> int:
