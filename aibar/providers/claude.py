@@ -71,6 +71,8 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
         snap.error = f"Сетевая ошибка: {exc}"
         return snap
 
+    if resp.status_code != 200:
+        snap.http_status = resp.status_code
     if resp.status_code == 401:
         # Claude Code refreshes the token lazily — on the first real API call,
         # not at startup, so just opening a session is not enough.

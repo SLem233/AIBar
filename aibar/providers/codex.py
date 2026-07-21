@@ -68,6 +68,8 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
         snap.error = f"Сетевая ошибка: {exc}"
         return snap
 
+    if resp.status_code != 200:
+        snap.http_status = resp.status_code
     if resp.status_code in (401, 403):
         snap.error = f"{resp.status_code} — запустите codex для повторной авторизации"
         return snap

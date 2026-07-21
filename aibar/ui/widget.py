@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import theme
+from ..geoblock import PAUSED_MESSAGE
 from ..providers.base import ProviderSnapshot
 from ..update import RELEASES_URL
 from .dashboard import ProviderCard
@@ -69,6 +70,28 @@ class UpdateBadge(QLabel):
         if event.button() == Qt.LeftButton:
             QDesktopServices.openUrl(QUrl(RELEASES_URL))
         super().mousePressEvent(event)
+
+
+class VpnBadge(QLabel):
+    """Pill shown while polling is paused because the VPN is off."""
+
+    def __init__(self, parent=None):
+        super().__init__("⏸ нет VPN", parent)
+        self.setAlignment(Qt.AlignCenter)
+        self.setToolTip(PAUSED_MESSAGE)
+        self.setStyleSheet(
+            f"""
+            background: rgba(250, 178, 25, 38);
+            color: {theme.WARNING};
+            border: 1px solid {theme.WARNING};
+            border-radius: 7px;
+            padding: 2px 6px;
+            font-family: "{theme.FONT_FAMILY}";
+            font-size: 10px;
+            font-weight: 600;
+            """
+        )
+        self.hide()
 
 
 class HoverPanel(QWidget):
@@ -182,7 +205,7 @@ class GaugeTile(QWidget):
 
     def update_snapshot(self, snap: ProviderSnapshot) -> None:
         self.gauge.set_percents([w.used_percent for w in snap.windows])
-        suffix = " ⚠" if snap.error else ""
+        suffix = " ⏸" if snap.paused else (" ⚠" if snap.error else "")
         self.caption.setText(f"{snap.provider}{suffix}")
 
     def resizeEvent(self, event) -> None:
@@ -227,10 +250,12 @@ class DesktopWidget(QWidget):
         grip.setStyleSheet("background: transparent; width: 14px; height: 14px;")
 
         self.update_badge = UpdateBadge(self)
+        self.vpn_badge = VpnBadge(self)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 2)
         layout.addWidget(self.update_badge)
+        layout.addWidget(self.vpn_badge)
         layout.addLayout(self.tiles_layout, stretch=1)
         layout.addWidget(grip, alignment=Qt.AlignBottom | Qt.AlignRight)
 
@@ -258,6 +283,7 @@ class DesktopWidget(QWidget):
                 self.tiles_layout.addWidget(tile, stretch=1)
             tile.update_snapshot(snap)
         self._snapshots = snapshots
+        self.vpn_badge.setVisible(any(s.paused for s in snapshots))
         self._record_activity(snapshots)
         self._apply_visibility()
         # the hover panel always shows every provider, regardless of mode
@@ -289,7 +315,7 @@ class DesktopWidget(QWidget):
         usage = {
             s.provider: sum(w.used_percent for w in s.windows)
             for s in snapshots
-            if not s.error and s.windows
+            if not s.error and not s.paused and s.windows
         }
         self._activity.append((now, usage))
         cutoff = now - 15 * 60

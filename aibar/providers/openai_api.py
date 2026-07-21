@@ -75,6 +75,7 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
         buckets = _fetch_costs(key, since)
     except PermissionError as exc:
         code = exc.args[0]
+        snap.http_status = code
         if code == 401:
             snap.error = "401 — нужен именно Admin-ключ (sk-admin…), не обычный ключ проекта"
         else:

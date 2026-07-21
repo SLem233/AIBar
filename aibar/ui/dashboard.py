@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import theme
+from ..geoblock import PAUSED_MESSAGE
 from ..providers.base import ProviderSnapshot
 from .gauge import RadialGauge
 
@@ -76,6 +77,13 @@ class ProviderCard(QFrame):
         self.plan.setText(snap.plan)
         self._clear_rows()
         self.gauge.set_percents([w.used_percent for w in snap.windows])
+
+        if snap.paused:
+            notice = QLabel(f"⏸ {PAUSED_MESSAGE}")
+            notice.setWordWrap(True)
+            notice.setStyleSheet(f"color: {theme.WARNING};")
+            self.rows.addWidget(notice, 0, 0, 1, 3)
+            # fall through: stale windows below stay visible
 
         if snap.error:
             error = QLabel(f"⚠ {snap.error}")

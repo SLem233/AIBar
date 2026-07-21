@@ -11,9 +11,10 @@ from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QPainter,
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import config, theme
+from .geoblock import GeoBlockGuard
 from .help import open_help
+from .polling import poll_all
 from .update import UpdateChecker
-from .providers import PROVIDERS
 from .providers.base import ProviderSnapshot
 from .ui import DashboardWindow, DesktopWidget
 from .ui.settings import SettingsDialog
@@ -30,6 +31,8 @@ class UsagePoller(QObject):
         super().__init__(parent)
         self._cfg = cfg
         self._busy = False
+        self._guard = GeoBlockGuard()
+        self._last_good: dict[str, ProviderSnapshot] = {}
 
     def set_config(self, cfg: dict) -> None:
         self._cfg = cfg
@@ -41,16 +44,7 @@ class UsagePoller(QObject):
         threading.Thread(target=self._fetch_all, daemon=True).start()
 
     def _fetch_all(self) -> None:
-        cfg = dict(self._cfg)
-        snapshots = []
-        for name in cfg.get("providers") or []:
-            fetch = PROVIDERS.get(name)
-            if fetch is None:
-                continue
-            try:
-                snapshots.append(fetch(cfg))
-            except Exception as exc:  # a provider crash must not kill polling
-                snapshots.append(ProviderSnapshot(provider=name, error=str(exc)))
+        snapshots = poll_all(dict(self._cfg), self._guard, self._last_good)
         self._busy = False
         self.snapshots_ready.emit(snapshots)
 
@@ -248,7 +242,7 @@ class AIBarApp:
         self.widget.update_snapshots(snapshots)
 
         # Tray gauge shows the most constrained provider (highest session usage)
-        active = [s for s in snapshots if not s.error and s.windows]
+        active = [s for s in snapshots if not s.error and not s.paused and s.windows]
         if active:
             worst = max(active, key=lambda s: s.session_percent or 0)
             self.tray.setIcon(
@@ -256,7 +250,9 @@ class AIBarApp:
             )
         tooltip_lines = []
         for snap in snapshots:
-            if snap.error:
+            if snap.paused:
+                tooltip_lines.append(f"{snap.provider}: ⏸ нет VPN")
+            elif snap.error:
                 tooltip_lines.append(f"{snap.provider}: ⚠ {snap.error}")
             else:
                 parts = [
