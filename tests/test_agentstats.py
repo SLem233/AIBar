@@ -180,6 +180,40 @@ def test_load_data_missing_db_raises(tmp_path):
         agentstats.load_data(tmp_path / "nope.db")
 
 
+def test_template_has_no_hardcoded_agent_matrix(ledger, tmp_path):
+    """«Проект × агент» строится из данных: новые агенты (Cursor) подтягиваются сами."""
+    out = tmp_path / "stats.html"
+    agentstats.generate(ledger, out)
+    text = out.read_text(encoding="utf-8")
+    assert 'text-align:right;">Codex</th>' not in text  # колонки не захардкожены
+    assert "'cursor' ? 'Cursor'" in text  # человекочитаемое имя для Cursor
+
+
+def test_outliers_since_is_embedded_and_filter_used(ledger, tmp_path):
+    """«Вне реестра»: сессии до отметки скрываются, новые — появляются."""
+    out = tmp_path / "stats.html"
+    agentstats.generate(ledger, out, outliers_since="2026-07-22T00:00:00+00:00")
+    text = out.read_text(encoding="utf-8")
+    assert '"outliers_since": "2026-07-22T00:00:00+00:00"' in text
+    assert "RAW.outliers_since" in text  # шаблон применяет фильтр
+
+
+def test_outliers_since_defaults_to_empty(ledger, tmp_path):
+    out = tmp_path / "stats.html"
+    agentstats.generate(ledger, out)
+    assert '"outliers_since": ""' in out.read_text(encoding="utf-8")
+
+
+def test_chart_gap_adapts_to_bucket_count(ledger, tmp_path):
+    """Баг приёмки 23.07: «всё время» по дням — сотни столбиков с зазором 3px
+    шире страницы, график уезжал за край с горизонтальным скроллом."""
+    out = tmp_path / "stats.html"
+    agentstats.generate(ledger, out)
+    text = out.read_text(encoding="utf-8")
+    assert "buckets.length > 200 ? 0" in text  # адаптивный зазор
+    assert "gap:${gap}px" in text  # применяется и к столбикам, и к подписям
+
+
 def test_generate_writes_self_contained_page(ledger, tmp_path):
     out = tmp_path / "stats.html"
     result = agentstats.generate(ledger, out)

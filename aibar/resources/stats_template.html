@@ -12,10 +12,10 @@
     --color-bg: #f3f2f2; --color-surface: #eae9e9; --color-text: #201f1d;
     --color-accent: #b68235;
     --color-divider: color-mix(in srgb, #201f1d 16%, transparent);
-    /* нейтральные затемнены относительно исходной палитры — мелкий серый
-       текст на дашборде читался плохо (правка по приёмке) */
-    --color-neutral-100: #f8f4f4; --color-neutral-500: #7d7979;
-    --color-neutral-600: #5d5a5a; --color-neutral-700: #4a4747; --color-neutral-800: #383535;
+    /* нейтральные затемнены дважды против исходной палитры (правки по
+       приёмке 23.07): сейчас — середина между прошлым шагом и чёрным */
+    --color-neutral-100: #f8f4f4; --color-neutral-500: #3e3c3c;
+    --color-neutral-600: #2e2d2d; --color-neutral-700: #252323; --color-neutral-800: #1c1a1a;
     --color-accent-100: #fff3e4; --color-accent-200: #ffe3bf; --color-accent-300: #facb8d;
     --color-accent-600: #a06f24; --color-accent-700: #7d5411; --color-accent-800: #5a3b0a;
     --font-heading: "Cormorant Garamond", Georgia, serif;
@@ -53,15 +53,15 @@
   .kpi .meta { font-size: 13.5px; color: var(--color-neutral-600); margin-top: 2px; }
   h2.sec { font-size: 26px; font-weight: 500; }
   .chart { display: flex; align-items: flex-end; gap: 3px; height: 150px; margin-top: 20px; border-bottom: 1px solid var(--color-divider); padding-bottom: 1px; }
-  .bar { flex: 1; background: var(--color-accent-200); border-top: 2px solid var(--color-accent); border-radius: 1px 1px 0 0; }
-  .xlabels { display: flex; gap: 3px; margin-top: 6px; }
-  .xlabels div { flex: 1; font-size: 12px; color: var(--color-neutral-600); text-align: center; white-space: nowrap; }
+  .bar { flex: 1; min-width: 0; background: var(--color-accent-200); border-top: 2px solid var(--color-accent); border-radius: 1px 1px 0 0; }
+  .xlabels { display: flex; gap: 3px; margin-top: 6px; overflow: hidden; }
+  .xlabels div { flex: 1; min-width: 0; font-size: 12px; color: var(--color-neutral-600); text-align: center; white-space: nowrap; }
   .cols { display: grid; grid-template-columns: 1.25fr 1fr; gap: 44px; }
   .prow { padding: 10px 0; border-bottom: 1px solid var(--color-divider); }
   .prow .r1 { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-4); }
   .prow .track { height: 7px; margin-top: 7px; background: var(--color-neutral-100); border-radius: 2px; }
   .prow .fill { height: 7px; background: var(--color-accent-300); border-right: 2px solid var(--color-accent); border-radius: 2px; }
-  .agentcards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+  .agentcards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-4); }
   .agentcards .card { padding: var(--space-4); }
   .agentcards .k { font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-accent-700); }
   .agentcards .v { font-family: var(--font-heading); font-size: 32px; margin-top: 4px; }
@@ -69,7 +69,7 @@
   .krow { display: flex; justify-content: space-between; gap: var(--space-4); padding: 6px 0; border-bottom: 1px solid var(--color-divider); font-size: 14.5px; }
   .krow .r { color: var(--color-neutral-700); white-space: nowrap; }
   table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  table.table th { text-align: left; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 72%, transparent); padding: var(--space-2); border-bottom: 1px solid var(--color-divider); }
+  table.table th { text-align: left; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 86%, transparent); padding: var(--space-2); border-bottom: 1px solid var(--color-divider); }
   table.table td { padding: var(--space-2); border-bottom: 1px solid var(--color-divider); }
   table.table tbody tr:hover { background: color-mix(in srgb, var(--color-text) 4%, transparent); }
   .mono { font-family: Consolas, "SF Mono", monospace; }
@@ -118,7 +118,7 @@ function fmtTok(n) {
   if (n >= 1e3) return Math.round(n / 1e3) + ' тыс';
   return String(n);
 }
-const agentName = a => a === 'claude-code' ? 'Claude Code' : a === 'codex' ? 'Codex' : a;
+const agentName = a => a === 'claude-code' ? 'Claude Code' : a === 'codex' ? 'Codex' : a === 'cursor' ? 'Cursor' : a;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 /* Имя проекта → ссылка на его HTML-карточку рядом (если карточка есть).
    Обычная ссылка: открывается в этом же окне, правой кнопкой — новая
@@ -163,8 +163,11 @@ function compute() {
     bump(byProj, proj); bump(byAgent, s.agent); bump(byType, s.task_type || 'без типа');
     const mm = mtx[proj + '||' + s.agent] || (mtx[proj + '||' + s.agent] = { act: 0, out: 0 });
     mm.out += out; if (!sub) mm.act += act;
-    if (!s.project && !sub) {
-      const om = outMap[s.cwd] || (outMap[s.cwd] = { act: 0, out: 0, sess: 0 });
+    // «Вне реестра»: сессии до отметки outliers_since помечены как «не для
+    // анализа» и список не засоряют; всё новое появляется как обычно.
+    if (!s.project && !sub && (!RAW.outliers_since || s.last_ts > RAW.outliers_since)) {
+      const dir = s.cwd || '(папка неизвестна)';
+      const om = outMap[dir] || (outMap[dir] = { act: 0, out: 0, sess: 0 });
       om.act += act; om.out += out; om.sess++;
     }
     try { for (const [m, v] of Object.entries(JSON.parse(s.models_json || '{}'))) { if (m !== '<synthetic>') byModel[m] = (byModel[m] || 0) + v; } } catch (e) {}
@@ -238,6 +241,9 @@ function render() {
   const bVal = b => state.metric === 'время' ? b.act : b.out;
   const maxD = Math.max(1, ...buckets.map(bVal));
   const every = Math.max(1, Math.ceil(buckets.length / 12));
+  // При сотнях корзин («всё время» по дням) фиксированный зазор шире
+  // страницы — зазор сжимается, чтобы график всегда влезал без скролла.
+  const gap = buckets.length > 200 ? 0 : buckets.length > 90 ? 1 : 3;
   const groupWord = { day: '', week: 'неделя с ', month: 'месяц ' }[state.group];
   const bars = buckets.map((b, i) => {
     const v = bVal(b);
@@ -279,8 +285,8 @@ function render() {
           </div>
         </div>
       </div>
-      <div class="chart">${bars.map(b => `<div class="bar" title="${esc(b.tip)}" style="height:${b.h}px;${b.h === 0 ? 'border-top:none;' : ''}"></div>`).join('')}</div>
-      <div class="xlabels tnum">${bars.map(b => `<div>${b.show ? b.lbl : ''}</div>`).join('')}</div>
+      <div class="chart" style="gap:${gap}px;">${bars.map(b => `<div class="bar" title="${esc(b.tip)}" style="height:${b.h}px;${b.h === 0 ? 'border-top:none;' : ''}"></div>`).join('')}</div>
+      <div class="xlabels tnum" style="gap:${gap}px;">${bars.map(b => `<div>${b.show ? b.lbl : ''}</div>`).join('')}</div>
     </section>
     <div class="hr"></div>
     <section class="cols">
@@ -288,7 +294,6 @@ function render() {
         <div style="display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-4);margin-bottom:20px;">
           <h2 class="sec">Проекты</h2>
           <div class="sort" id="projSort">
-            <span style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-500);">сорт.</span>
             <button data-s="act" class="${state.projSort === 'act' ? 'on' : ''}">время</button>
             <button data-s="sess" class="${state.projSort === 'sess' ? 'on' : ''}">сессии</button>
             <button data-s="out" class="${state.projSort === 'out' ? 'on' : ''}">токены</button>
@@ -323,12 +328,14 @@ function render() {
     <div class="hr"></div>
     <section>
       <h2 class="sec" style="margin-bottom:var(--space-4);">Проект × агент</h2>
-      <table class="table tnum">
-        <thead><tr><th>Проект</th><th style="text-align:right;">Claude Code</th><th style="text-align:right;">Codex</th><th style="text-align:right;">Всего</th></tr></thead>
-        <tbody>
-          ${projArr.map(([name, v]) => `<tr><td>${projName(name)}</td><td style="text-align:right;">${cell(c.mtx[name + '||claude-code'])}</td><td style="text-align:right;">${cell(c.mtx[name + '||codex'])}</td><td style="text-align:right;">${fmtH(v.act)} · ${fmtTok(v.out)}</td></tr>`).join('')}
-        </tbody>
-      </table>
+      <div style="overflow-x:auto;">
+        <table class="table tnum">
+          <thead><tr><th>Проект</th>${agents.map(([a]) => `<th style="text-align:right;">${esc(agentName(a))}</th>`).join('')}<th style="text-align:right;">Всего</th></tr></thead>
+          <tbody>
+            ${projArr.map(([name, v]) => `<tr><td>${projName(name)}</td>${agents.map(([a]) => `<td style="text-align:right;">${cell(c.mtx[name + '||' + a])}</td>`).join('')}<td style="text-align:right;">${fmtH(v.act)} · ${fmtTok(v.out)}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
     </section>
     <div class="hr"></div>
     <section>

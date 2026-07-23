@@ -29,6 +29,8 @@ DEFAULTS = {
     "agentpulse_db": r"C:\SL\CursosWorkspace\AgentPulse\data\ledger.db",
     # Папка карточек проектов в vault — имена проектов на дашборде кликабельны
     "agentpulse_cards": r"C:\SL\Vaults\SL_Wiki\sl_projects",
+    # «Вне реестра»: сессии старше этой отметки (ISO) скрыты как «не для анализа»
+    "agentpulse_outliers_since": "",
     # Renewal date (dd.mm.yyyy) + cycle for providers whose APIs expose no
     # billing anchor; empty date = don't show. Past dates roll forward.
     "claude_renewal_date": "",

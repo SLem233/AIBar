@@ -122,7 +122,11 @@ def _write_cards(data: dict, out_path: Path, cards_dir: Path | None) -> None:
         (cards_out / f"{name}.html").write_text(page, encoding="utf-8")
 
 
-def load_data(db_path: Path | str, cards_dir: Path | str | None = None) -> dict:
+def load_data(
+    db_path: Path | str,
+    cards_dir: Path | str | None = None,
+    outliers_since: str = "",
+) -> dict:
     """Sessions and daily slices from ledger.db as plain JSON-ready dicts."""
     db_path = Path(db_path)
     if not db_path.is_file():
@@ -139,6 +143,9 @@ def load_data(db_path: Path | str, cards_dir: Path | str | None = None) -> dict:
         "sessions": sessions,
         "daily": daily,
         "cards": _card_links(projects, Path(cards_dir) if cards_dir else None),
+        # Сессии «вне реестра» старше этой отметки помечены как «не для
+        # анализа» и в одноимённый список не попадают (обнуление 23.07.2026)
+        "outliers_since": outliers_since or "",
         "source": str(db_path),
         "generated_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
     }
@@ -148,9 +155,10 @@ def generate(
     db_path: Path | str,
     out_path: Path | str,
     cards_dir: Path | str | None = None,
+    outliers_since: str = "",
 ) -> Path:
     """Render the standalone stats page; returns the written path."""
-    data = load_data(db_path, cards_dir=cards_dir)
+    data = load_data(db_path, cards_dir=cards_dir, outliers_since=outliers_since)
     template = _resource("stats_template.html").read_text(encoding="utf-8")
     # "</" must not appear raw inside the inline <script> (a session title
     # containing </script> would terminate it); JSON stays equivalent.
@@ -167,9 +175,13 @@ def open_stats(cfg: dict | None = None) -> None:
     """Generate a fresh page from the ledger and open it in the browser."""
     db_path = (cfg or {}).get("agentpulse_db") or DEFAULT_DB
     cards_dir = (cfg or {}).get("agentpulse_cards") or DEFAULT_CARDS_DIR
+    outliers_since = (cfg or {}).get("agentpulse_outliers_since") or ""
     try:
         target = generate(
-            db_path, CONFIG_DIR / "agentpulse_stats.html", cards_dir=cards_dir
+            db_path,
+            CONFIG_DIR / "agentpulse_stats.html",
+            cards_dir=cards_dir,
+            outliers_since=outliers_since,
         )
     except FileNotFoundError:
         QMessageBox.warning(

@@ -66,7 +66,10 @@
   отрендеренная из vault (`sl_projects/<Имя>.md`) в том же стиле; AUTO-блок
   AgentPulse на карточке не показывается (дублирует шапку);
 - пути в `config.json`: `agentpulse_db` (ledger) и `agentpulse_cards`
-  (папка карточек vault).
+  (папка карточек vault); `agentpulse_outliers_since` (ISO-отметка) скрывает
+  из списка «Вне реестра» все сессии старше неё — «обнуление» списка;
+- агенты не захардкожены: колонки «Проект × агент» и карточки агентов
+  строятся по данным ledger (Claude Code, Codex, Cursor, …).
 
 Файлы: `aibar/agentstats.py`, `aibar/resources/stats_template.html`,
 `aibar/resources/card_template.html`. Страницы кладутся в
