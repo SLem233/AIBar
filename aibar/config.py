@@ -25,6 +25,10 @@ DEFAULTS = {
     "openai_balance_usd": 0,
     "openai_balance_date": "",
     "tavily_api_key": "",
+    # Личная фича (ветка slem): путь к ledger AgentPulse для пункта «Статистика»
+    "agentpulse_db": r"C:\SL\CursosWorkspace\AgentPulse\data\ledger.db",
+    # Папка карточек проектов в vault — имена проектов на дашборде кликабельны
+    "agentpulse_cards": r"C:\SL\Vaults\SL_Wiki\sl_projects",
     # Renewal date (dd.mm.yyyy) + cycle for providers whose APIs expose no
     # billing anchor; empty date = don't show. Past dates roll forward.
     "claude_renewal_date": "",

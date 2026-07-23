@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__ — карточка проекта</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600&family=Lora:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --color-bg: #f3f2f2; --color-surface: #eae9e9; --color-text: #201f1d;
+    --color-accent: #b68235;
+    --color-divider: color-mix(in srgb, #201f1d 16%, transparent);
+    --color-neutral-100: #f8f4f4; --color-neutral-500: #7d7979;
+    --color-neutral-600: #5d5a5a; --color-neutral-700: #4a4747; --color-neutral-800: #383535;
+    --color-accent-100: #fff3e4; --color-accent-300: #facb8d;
+    --color-accent-600: #a06f24; --color-accent-700: #7d5411;
+    --font-heading: "Cormorant Garamond", Georgia, serif;
+    --font-body: "Lora", Georgia, serif;
+    --space-2: 9.2px; --space-3: 13.8px; --space-4: 18.4px; --space-6: 27.6px; --space-8: 36.8px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-body); font-size: 15.5px; line-height: 1.6; }
+  ::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
+  :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: var(--space-8) var(--space-6) 56px; }
+  a { color: var(--color-accent-700); }
+  a:hover { color: var(--color-accent-600); }
+  .back { font-size: 14px; color: var(--color-neutral-600); text-decoration: none; }
+  .back:hover { color: var(--color-accent-600); }
+  header.top { border-bottom: 1px solid var(--color-text); padding-bottom: var(--space-4); margin-bottom: var(--space-6); }
+  h1.title { font-family: var(--font-heading); font-size: 40px; font-weight: 500; line-height: 1.1; margin: 10px 0 0; }
+  .meta { display: grid; grid-template-columns: max-content 1fr; gap: 3px 22px; margin: var(--space-4) 0 0; font-size: 13.5px; }
+  .meta .k { color: var(--color-neutral-500); text-transform: uppercase; letter-spacing: 0.09em; font-size: 11.5px; align-self: baseline; padding-top: 2px; }
+  .meta .v { color: var(--color-neutral-800); font-variant-numeric: tabular-nums; }
+  /* ── рендер markdown-тела карточки ── */
+  .doc h1, .doc h2, .doc h3 { font-family: var(--font-heading); font-weight: 500; line-height: 1.15; margin: var(--space-6) 0 var(--space-3); }
+  .doc h1 { font-size: 32px; } .doc h2 { font-size: 26px; } .doc h3 { font-size: 20px; }
+  .doc h1:first-child { display: none; }  /* заголовок уже в шапке */
+  .doc p { margin: 0 0 var(--space-3); }
+  .doc ul, .doc ol { margin: 0 0 var(--space-3); padding-left: 24px; }
+  .doc li { margin-bottom: 5px; }
+  .doc table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 0 0 var(--space-4); font-variant-numeric: tabular-nums; }
+  .doc th { text-align: left; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 72%, transparent); padding: var(--space-2); border-bottom: 1px solid var(--color-divider); }
+  .doc td { padding: var(--space-2); border-bottom: 1px solid var(--color-divider); }
+  .doc code { font-family: Consolas, "SF Mono", monospace; font-size: 13.5px; background: var(--color-surface); padding: 1px 5px; border-radius: 3px; }
+  .doc pre { background: var(--color-surface); padding: var(--space-3); border-radius: 4px; overflow-x: auto; }
+  .doc pre code { background: none; padding: 0; }
+  .doc blockquote { margin: 0 0 var(--space-3); padding: 2px 0 2px var(--space-4); border-left: 2px solid var(--color-accent-300); color: var(--color-neutral-700); }
+  .doc hr { height: 1px; border: 0; background: var(--color-divider); margin: var(--space-6) 0; }
+  footer.bot { margin-top: 44px; border-top: 1px solid var(--color-text); padding-top: var(--space-3); font-size: 13px; color: var(--color-neutral-600); display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="back" href="__BACK__">← Статистика AgentPulse</a>
+    <h1 class="title">__TITLE__</h1>
+    __META__
+  </header>
+  <div class="doc">
+__BODY__
+  </div>
+  <footer class="bot"><div>Карточка проекта AgentPulse · __SOURCE__</div><div>сгенерировано AIBar __GENERATED__</div></footer>
+</div>
+</body>
+</html>

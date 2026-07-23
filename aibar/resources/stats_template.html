@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentPulse — статистика агентов</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600&family=Lora:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  /* ── Classical design tokens (из дизайн-системы хендоффа) ── */
+  :root {
+    --color-bg: #f3f2f2; --color-surface: #eae9e9; --color-text: #201f1d;
+    --color-accent: #b68235;
+    --color-divider: color-mix(in srgb, #201f1d 16%, transparent);
+    /* нейтральные затемнены относительно исходной палитры — мелкий серый
+       текст на дашборде читался плохо (правка по приёмке) */
+    --color-neutral-100: #f8f4f4; --color-neutral-500: #7d7979;
+    --color-neutral-600: #5d5a5a; --color-neutral-700: #4a4747; --color-neutral-800: #383535;
+    --color-accent-100: #fff3e4; --color-accent-200: #ffe3bf; --color-accent-300: #facb8d;
+    --color-accent-600: #a06f24; --color-accent-700: #7d5411; --color-accent-800: #5a3b0a;
+    --font-heading: "Cormorant Garamond", Georgia, serif;
+    --font-body: "Lora", Georgia, serif;
+    --space-2: 9.2px; --space-3: 13.8px; --space-4: 18.4px; --space-6: 27.6px; --space-8: 36.8px;
+    --radius-sm: 2px; --radius-md: 4px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-body); font-size: 15px; line-height: 1.55; }
+  h1, h2, h3 { font-family: var(--font-heading); line-height: 1.12; margin: 0; }
+  a { color: var(--color-accent-700); }
+  a:hover { color: var(--color-accent-600); }
+  ::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
+  :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .tnum { font-variant-numeric: tabular-nums; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: var(--space-8) var(--space-6) 56px; }
+  .hr { height: 1px; border: 0; background: var(--color-divider); margin: var(--space-8) 0 var(--space-6); }
+  .card { border: 1px solid var(--color-divider); border-radius: var(--radius-md); }
+  .seg { display: flex; border: 1px solid var(--color-divider); border-radius: var(--radius-sm); overflow: hidden; }
+  .seg button { padding: 7px 14px; white-space: nowrap; font-family: var(--font-body); font-size: 14px; cursor: pointer; border: none; background: transparent; color: var(--color-neutral-700); }
+  .seg button + button { border-left: 1px solid var(--color-divider); }
+  .seg button:hover { color: var(--color-accent-600); }
+  .seg button.on { background: var(--color-accent-100); color: var(--color-accent-800); }
+  .sort { display: flex; align-items: center; gap: 4px; }
+  .sort button { padding: 4px 11px; white-space: nowrap; font-family: var(--font-body); font-size: 13px; cursor: pointer; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--color-neutral-600); }
+  .sort button:hover { color: var(--color-accent-600); }
+  .sort button.on { background: var(--color-accent-100); color: var(--color-accent-800); }
+  header.top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-6); border-bottom: 1px solid var(--color-text); padding-bottom: var(--space-4); flex-wrap: wrap; }
+  .kpis { display: grid; grid-template-columns: repeat(5, 1fr); margin-top: var(--space-6); }
+  .kpi { padding: 0 20px; }
+  .kpi + .kpi { border-left: 1px solid var(--color-divider); }
+  .kpi:first-child { padding-left: 0; }
+  .kpi .lbl { font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-neutral-600); }
+  .kpi .val { font-family: var(--font-heading); font-size: 46px; line-height: 1.15; margin-top: 6px; }
+  .kpi .meta { font-size: 13.5px; color: var(--color-neutral-600); margin-top: 2px; }
+  h2.sec { font-size: 26px; font-weight: 500; }
+  .chart { display: flex; align-items: flex-end; gap: 3px; height: 150px; margin-top: 20px; border-bottom: 1px solid var(--color-divider); padding-bottom: 1px; }
+  .bar { flex: 1; background: var(--color-accent-200); border-top: 2px solid var(--color-accent); border-radius: 1px 1px 0 0; }
+  .xlabels { display: flex; gap: 3px; margin-top: 6px; }
+  .xlabels div { flex: 1; font-size: 12px; color: var(--color-neutral-600); text-align: center; white-space: nowrap; }
+  .cols { display: grid; grid-template-columns: 1.25fr 1fr; gap: 44px; }
+  .prow { padding: 10px 0; border-bottom: 1px solid var(--color-divider); }
+  .prow .r1 { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-4); }
+  .prow .track { height: 7px; margin-top: 7px; background: var(--color-neutral-100); border-radius: 2px; }
+  .prow .fill { height: 7px; background: var(--color-accent-300); border-right: 2px solid var(--color-accent); border-radius: 2px; }
+  .agentcards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+  .agentcards .card { padding: var(--space-4); }
+  .agentcards .k { font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-accent-700); }
+  .agentcards .v { font-family: var(--font-heading); font-size: 32px; margin-top: 4px; }
+  .agentcards .m { font-size: 13.5px; color: var(--color-neutral-700); margin-top: 4px; line-height: 1.6; }
+  .krow { display: flex; justify-content: space-between; gap: var(--space-4); padding: 6px 0; border-bottom: 1px solid var(--color-divider); font-size: 14.5px; }
+  .krow .r { color: var(--color-neutral-700); white-space: nowrap; }
+  table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.table th { text-align: left; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 72%, transparent); padding: var(--space-2); border-bottom: 1px solid var(--color-divider); }
+  table.table td { padding: var(--space-2); border-bottom: 1px solid var(--color-divider); }
+  table.table tbody tr:hover { background: color-mix(in srgb, var(--color-text) 4%, transparent); }
+  .mono { font-family: Consolas, "SF Mono", monospace; }
+  footer.bot { margin-top: 44px; border-top: 1px solid var(--color-text); padding-top: var(--space-3); display: flex; justify-content: space-between; font-size: 13px; color: var(--color-neutral-600); }
+  .msg { margin-top: var(--space-8); padding: var(--space-6); }
+  @media (max-width: 860px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); gap: var(--space-4); }
+    .kpi, .kpi:first-child { padding: var(--space-3) 0; border-left: 0; border-top: 1px solid var(--color-divider); }
+    .cols { grid-template-columns: 1fr; gap: var(--space-8); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <header class="top">
+    <div>
+      <div style="font-family:var(--font-heading);font-size:40px;line-height:1.1;">AgentPulse</div>
+      <div class="tnum" style="font-size:14px;color:var(--color-neutral-600);margin-top:4px;" id="caption">Загрузка…</div>
+    </div>
+    <div class="seg" id="periods"></div>
+  </header>
+  <div id="body"></div>
+</div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════════
+   AgentPulse dashboard — генерируется AIBar (пункт меню «Статистика»).
+   Данные встроены при генерации (const RAW): никаких CDN и сетевых
+   запросов, страница полностью автономна. Формулы агрегации повторяют
+   правила AgentPulse 1:1 (см. дизайн-хендофф).
+   Страница локальная и одно-пользовательская; всё, что попадает в
+   innerHTML из данных, проходит через esc(), заголовки сессий
+   дополнительно очищаются от тегов.
+   ══════════════════════════════════════════════════════════════════════ */
+
+const RAW = __AGENTPULSE_DATA__;
+
+const state = { sessions: RAW.sessions, daily: RAW.daily || [], period: 30, group: 'day', projSort: 'act', metric: 'время', rows: 12 };
+
+const MSK = 3 * 3600e3;
+const mskDay = ts => new Date(new Date(ts).getTime() + MSK).toISOString().slice(0, 10);
+function fmtH(sec) { const h = sec / 3600; return h >= 1 ? h.toFixed(1).replace('.', ',') + ' ч' : Math.round(sec / 60) + ' мин'; }
+function fmtTok(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(2).replace('.', ',') + ' млрд';
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace('.', ',') + ' млн';
+  if (n >= 1e3) return Math.round(n / 1e3) + ' тыс';
+  return String(n);
+}
+const agentName = a => a === 'claude-code' ? 'Claude Code' : a === 'codex' ? 'Codex' : a;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+/* Имя проекта → ссылка на его HTML-карточку рядом (если карточка есть).
+   Обычная ссылка: открывается в этом же окне, правой кнопкой — новая
+   вкладка/окно стандартными средствами браузера. */
+const projName = name => {
+  const url = (RAW.cards || {})[name];
+  return url
+    ? `<a href="${esc(url)}" style="color:inherit;text-decoration-color:var(--color-accent-300);" title="Открыть карточку проекта">${esc(name)}</a>`
+    : esc(name);
+};
+
+/* Формулы AgentPulse: субагент (id с ":agent-") не считается сессией и не
+   даёт активного времени, но его токены учитываются. in = input + cache
+   creation; cache read — отдельно. Границы дня — МСК. */
+function compute() {
+  const { period, sessions: all, daily } = state;
+  const isSub = s => s.session_id.includes(':agent-');
+  let maxTs = '';
+  for (const s of all) if (s.last_ts > maxTs) maxTs = s.last_ts;
+  const todayKey = mskDay(maxTs || new Date().toISOString());
+  const cutoffMs = period ? (new Date(todayKey + 'T00:00:00+03:00').getTime() - (period - 1) * 86400e3) : 0;
+  const cutKey = period ? mskDay(new Date(cutoffMs).toISOString()) : '';
+  const sess = all.filter(s => !period || new Date(s.last_ts).getTime() >= cutoffMs);
+
+  const dailyRows = (daily || []).filter(r => !r.session_id.includes(':agent-'));
+  const covered = new Set(dailyRows.map(r => r.session_id));
+  let tAct = 0, tIn = 0, tOut = 0, tCache = 0, nSess = 0, nSub = 0;
+  const byProj = {}, byAgent = {}, byType = {}, byModel = {}, byDayMap = {}, mtx = {}, outMap = {};
+  for (const s of sess) {
+    const sub = isSub(s);
+    const inTok = (s.input_tokens || 0) + (s.cache_creation_tokens || 0);
+    const out = s.output_tokens || 0;
+    const act = s.time_reliable ? (s.active_seconds || 0) : 0;
+    const proj = s.project || 'Вне реестра';
+    tIn += inTok; tOut += out; tCache += s.cache_read_tokens || 0;
+    if (!sub) { tAct += act; nSess++; } else { nSub++; }
+    const bump = (map, key) => {
+      const m = map[key] || (map[key] = { act: 0, in: 0, out: 0, sess: 0 });
+      m.in += inTok; m.out += out;
+      if (!sub) { m.act += act; m.sess++; }
+    };
+    bump(byProj, proj); bump(byAgent, s.agent); bump(byType, s.task_type || 'без типа');
+    const mm = mtx[proj + '||' + s.agent] || (mtx[proj + '||' + s.agent] = { act: 0, out: 0 });
+    mm.out += out; if (!sub) mm.act += act;
+    if (!s.project && !sub) {
+      const om = outMap[s.cwd] || (outMap[s.cwd] = { act: 0, out: 0, sess: 0 });
+      om.act += act; om.out += out; om.sess++;
+    }
+    try { for (const [m, v] of Object.entries(JSON.parse(s.models_json || '{}'))) { if (m !== '<synthetic>') byModel[m] = (byModel[m] || 0) + v; } } catch (e) {}
+    if (!sub && s.first_ts) {
+      const fk = mskDay(s.first_ts);
+      (byDayMap[fk] || (byDayMap[fk] = { act: 0, out: 0, sess: 0 })).sess++;
+      if (s.time_reliable && !covered.has(s.session_id)) {
+        const lastKey = mskDay(s.last_ts), keys = [];
+        for (let t = new Date(s.first_ts).getTime(); ; t += 86400e3) { const k = mskDay(new Date(t).toISOString()); keys.push(k); if (k >= lastKey) break; if (keys.length > 120) break; }
+        const share = act / keys.length, oShare = out / keys.length;
+        for (const k of keys) { const dm = byDayMap[k] || (byDayMap[k] = { act: 0, out: 0, sess: 0 }); dm.act += share; dm.out += oShare; }
+      }
+    }
+  }
+  for (const r of dailyRows) {
+    if (period && r.date < cutKey) continue;
+    const dm = byDayMap[r.date] || (byDayMap[r.date] = { act: 0, out: 0, sess: 0 });
+    if (r.time_reliable) dm.act += r.active_seconds || 0;
+    dm.out += r.output_tokens || 0;
+  }
+  return { sess, todayKey, cutKey, tAct, tIn, tOut, tCache, nSess, nSub, byProj, byAgent, byType, byModel, byDayMap, mtx, outMap, maxTs };
+}
+
+/* Группировка дневных срезов: день / неделя (с понедельника) / месяц */
+const weekStart = k => { const d = new Date(k + 'T12:00:00Z'); const wd = (d.getUTCDay() + 6) % 7; d.setUTCDate(d.getUTCDate() - wd); return d.toISOString().slice(0, 10); };
+const bucketKey = k => state.group === 'week' ? weekStart(k) : state.group === 'month' ? k.slice(0, 7) : k;
+const bucketLabel = key => state.group === 'month'
+  ? key.slice(5, 7) + '.' + key.slice(2, 4)
+  : key.slice(8, 10) + '.' + key.slice(5, 7);
+
+function render() {
+  document.getElementById('periods').innerHTML = [[7, '7 дней'], [30, '30 дней'], [365, '12 месяцев'], [0, 'Всё время']]
+    .map(([p, l]) => `<button data-p="${p}" class="${p === state.period ? 'on' : ''}">${l}</button>`).join('');
+  const body = document.getElementById('body'), cap = document.getElementById('caption');
+
+  if (!state.sessions || !state.sessions.length) {
+    cap.textContent = 'Нет данных';
+    body.innerHTML = `<div class="card msg"><h2 class="sec">Данные не найдены</h2><div style="font-size:14px;margin-top:var(--space-2);color:var(--color-neutral-700);">Ledger AgentPulse пуст или не прочитан. Запустите <span class="mono">agentpulse collect</span> и обновите страницу через меню AIBar → Статистика.</div></div>`;
+    return;
+  }
+
+  const c = compute();
+  const fmtD = k => k.slice(8, 10) + '.' + k.slice(5, 7) + '.' + k.slice(0, 4);
+  const periodName = { 7: 'последние 7 дней', 30: 'последние 30 дней', 365: 'последние 12 месяцев' }[state.period];
+  cap.textContent = 'Статистика кодинговых агентов · ' + (state.period
+    ? periodName + ', ' + fmtD(c.cutKey) + ' — ' + fmtD(c.todayKey)
+    : 'всё время до ' + fmtD(c.todayKey));
+
+  // KPIs
+  const kpis = [
+    ['Активное время', fmtH(c.tAct), 'без простоя, паузы ≤ 5 мин'],
+    ['Сессий всего', String(c.nSess), 'с субагентами ' + c.nSub],
+    ['Токены in', fmtTok(c.tIn), 'input + cache creation'],
+    ['Токены out', fmtTok(c.tOut), 'сгенерировано агентами'],
+    ['Cache read', fmtTok(c.tCache), 'учитывается отдельно'],
+  ];
+
+  // chart: дни периода → корзины по выбранной группировке
+  let firstKey = c.cutKey;
+  if (!state.period) { firstKey = c.todayKey; for (const k of Object.keys(c.byDayMap)) if (k < firstKey) firstKey = k; }
+  const dayKeys = [];
+  for (let t = new Date(firstKey + 'T12:00:00Z').getTime(); ; t += 86400e3) { const k = new Date(t).toISOString().slice(0, 10); dayKeys.push(k); if (k >= c.todayKey) break; if (dayKeys.length > 4000) break; }
+  const buckets = [], bIdx = {};
+  for (const k of dayKeys) {
+    const bk = bucketKey(k);
+    let b = bIdx[bk];
+    if (!b) { b = bIdx[bk] = { key: bk, act: 0, out: 0, sess: 0 }; buckets.push(b); }
+    const d = c.byDayMap[k];
+    if (d) { b.act += d.act; b.out += d.out; b.sess += d.sess; }
+  }
+  const bVal = b => state.metric === 'время' ? b.act : b.out;
+  const maxD = Math.max(1, ...buckets.map(bVal));
+  const every = Math.max(1, Math.ceil(buckets.length / 12));
+  const groupWord = { day: '', week: 'неделя с ', month: 'месяц ' }[state.group];
+  const bars = buckets.map((b, i) => {
+    const v = bVal(b);
+    const h = v > 0 ? Math.max(3, Math.round(v / maxD * 148)) : 0;
+    const lbl = bucketLabel(b.key);
+    return { h, lbl, show: i % every === 0 || i === buckets.length - 1, tip: `${groupWord}${lbl} — ${fmtH(b.act)}, ${fmtTok(b.out)} out${b.sess ? ', сессий: ' + b.sess : ''}` };
+  });
+
+  // projects
+  const sortVal = v => state.projSort === 'sess' ? v.sess : state.projSort === 'out' ? v.out : v.act;
+  const projArr = Object.entries(c.byProj).sort((a, b) => sortVal(b[1]) - sortVal(a[1]));
+  const barMax = Math.max(1, ...projArr.map(([, v]) => sortVal(v)));
+
+  const agents = Object.entries(c.byAgent).sort((a, b) => b[1].act - a[1].act);
+  const types = Object.entries(c.byType).sort((a, b) => b[1].act - a[1].act);
+  const models = Object.entries(c.byModel).sort((a, b) => b[1] - a[1]).filter(([, v]) => v > 0).slice(0, 6);
+  const cell = m => m ? (fmtH(m.act) + ' · ' + fmtTok(m.out)) : '—';
+  const recent = c.sess.filter(s => !s.session_id.includes(':agent-')).sort((a, b) => b.last_ts.localeCompare(a.last_ts)).slice(0, state.rows);
+  const outliers = Object.entries(c.outMap).sort((a, b) => b[1].act - a[1].act).slice(0, 10);
+  const upd = new Date(new Date(c.maxTs).getTime() + MSK).toISOString().slice(0, 16).replace('T', ' ') + ' МСК';
+
+  body.innerHTML = `
+    <section class="kpis">
+      ${kpis.map(([l, v, m]) => `<div class="kpi"><div class="lbl tnum">${l}</div><div class="val tnum">${v}</div><div class="meta">${m}</div></div>`).join('')}
+    </section>
+    <div class="hr"></div>
+    <section>
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-4);flex-wrap:wrap;">
+        <h2 class="sec">Активность</h2>
+        <div style="font-size:13.5px;color:var(--color-neutral-600);display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+          <div class="sort" id="groupSel">
+            <button data-g="day" class="${state.group === 'day' ? 'on' : ''}">по дням</button>
+            <button data-g="week" class="${state.group === 'week' ? 'on' : ''}">по неделям</button>
+            <button data-g="month" class="${state.group === 'month' ? 'on' : ''}">по месяцам</button>
+          </div>
+          <div class="sort" id="metricSel">
+            <button data-m="время" class="${state.metric === 'время' ? 'on' : ''}">часы</button>
+            <button data-m="out" class="${state.metric !== 'время' ? 'on' : ''}">out-токены</button>
+          </div>
+        </div>
+      </div>
+      <div class="chart">${bars.map(b => `<div class="bar" title="${esc(b.tip)}" style="height:${b.h}px;${b.h === 0 ? 'border-top:none;' : ''}"></div>`).join('')}</div>
+      <div class="xlabels tnum">${bars.map(b => `<div>${b.show ? b.lbl : ''}</div>`).join('')}</div>
+    </section>
+    <div class="hr"></div>
+    <section class="cols">
+      <div>
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-4);margin-bottom:20px;">
+          <h2 class="sec">Проекты</h2>
+          <div class="sort" id="projSort">
+            <span style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-500);">сорт.</span>
+            <button data-s="act" class="${state.projSort === 'act' ? 'on' : ''}">время</button>
+            <button data-s="sess" class="${state.projSort === 'sess' ? 'on' : ''}">сессии</button>
+            <button data-s="out" class="${state.projSort === 'out' ? 'on' : ''}">токены</button>
+          </div>
+        </div>
+        ${projArr.map(([name, v]) => `
+          <div class="prow">
+            <div class="r1">
+              <div style="font-size:14.5px;${name === 'Вне реестра' ? 'color:var(--color-neutral-600);font-style:italic;' : ''}">${projName(name)}</div>
+              <div class="tnum" style="font-size:14px;color:var(--color-neutral-700);white-space:nowrap;">${fmtH(v.act)} · ${v.sess} сес. · ${fmtTok(v.out)} out</div>
+            </div>
+            <div class="track"><div class="fill" style="width:${Math.max(1, Math.round(sortVal(v) / barMax * 100))}%;"></div></div>
+          </div>`).join('')}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:var(--space-6);">
+        <div>
+          <h2 class="sec" style="margin-bottom:var(--space-4);">Агенты</h2>
+          <div class="agentcards">
+            ${agents.map(([a, v]) => `<div class="card"><div class="k">${esc(agentName(a))}</div><div class="v tnum">${fmtH(v.act)}</div><div class="m tnum">${v.sess} сессий · ${c.tAct ? Math.round(v.act / c.tAct * 100) : 0}% времени<br>in ${fmtTok(v.in)} · out ${fmtTok(v.out)}</div></div>`).join('')}
+          </div>
+        </div>
+        <div>
+          <h3 style="font-size:20px;font-weight:500;margin-bottom:var(--space-2);">Типы задач</h3>
+          ${types.map(([n, v]) => `<div class="krow"><div>${esc(n)}</div><div class="r tnum">${fmtH(v.act)} · ${v.sess} сес.</div></div>`).join('')}
+        </div>
+        <div>
+          <h3 style="font-size:20px;font-weight:500;margin-bottom:var(--space-2);">Модели</h3>
+          ${models.map(([n, v]) => `<div class="krow"><div>${esc(n)}</div><div class="r tnum">${fmtTok(v)} out</div></div>`).join('')}
+        </div>
+      </div>
+    </section>
+    <div class="hr"></div>
+    <section>
+      <h2 class="sec" style="margin-bottom:var(--space-4);">Проект × агент</h2>
+      <table class="table tnum">
+        <thead><tr><th>Проект</th><th style="text-align:right;">Claude Code</th><th style="text-align:right;">Codex</th><th style="text-align:right;">Всего</th></tr></thead>
+        <tbody>
+          ${projArr.map(([name, v]) => `<tr><td>${projName(name)}</td><td style="text-align:right;">${cell(c.mtx[name + '||claude-code'])}</td><td style="text-align:right;">${cell(c.mtx[name + '||codex'])}</td><td style="text-align:right;">${fmtH(v.act)} · ${fmtTok(v.out)}</td></tr>`).join('')}
+        </tbody>
+      </table>
+    </section>
+    <div class="hr"></div>
+    <section>
+      <h2 class="sec" style="margin-bottom:var(--space-4);">Последние сессии</h2>
+      <div style="overflow-x:auto;">
+        <table class="table">
+          <thead><tr><th>Дата</th><th>Проект</th><th>Агент</th><th>Сессия</th><th style="text-align:right;">Время</th><th style="text-align:right;">in</th><th style="text-align:right;">out</th></tr></thead>
+          <tbody>
+            ${recent.map(s => { const d = mskDay(s.last_ts); const title = (s.title || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 90) || '(без заголовка)'; return `<tr>
+              <td class="tnum" style="white-space:nowrap;">${d.slice(8, 10)}.${d.slice(5, 7)}</td>
+              <td style="white-space:nowrap;">${esc(s.project || '—')}</td>
+              <td style="white-space:nowrap;color:var(--color-neutral-700);">${esc(agentName(s.agent))}</td>
+              <td style="font-size:14px;color:var(--color-neutral-800);max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(title)}</td>
+              <td class="tnum" style="text-align:right;white-space:nowrap;">${s.time_reliable ? fmtH(s.active_seconds || 0) : '—'}</td>
+              <td class="tnum" style="text-align:right;white-space:nowrap;">${fmtTok((s.input_tokens || 0) + (s.cache_creation_tokens || 0))}</td>
+              <td class="tnum" style="text-align:right;white-space:nowrap;">${fmtTok(s.output_tokens || 0)}</td></tr>`; }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    ${outliers.length ? `<div class="hr"></div><section>
+      <h2 class="sec" style="margin-bottom:var(--space-2);">Вне реестра</h2>
+      <p style="font-size:14.5px;color:var(--color-neutral-700);margin:0 0 var(--space-4);max-width:70ch;">Сессии из папок, не привязанных к проектам. Чтобы учесть — зарегистрируйте папку: <span class="mono" style="font-size:13.5px;">agentpulse add-project "&lt;Имя&gt;" "&lt;путь&gt;"</span> или допишите путь в <span class="mono" style="font-size:13.5px;">aliases</span>.</p>
+      ${outliers.map(([p, v]) => `<div class="krow"><div class="mono" style="font-size:13.5px;color:var(--color-neutral-800);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p)}</div><div class="r tnum">${v.sess} сес. · ${fmtH(v.act)} · ${fmtTok(v.out)} out</div></div>`).join('')}
+    </section>` : ''}
+    <footer class="bot tnum"><div>Источник: ${esc(RAW.source || '—')} · сгенерировано AIBar ${esc(RAW.generated_at || '')}</div><div>Последнее событие ${upd}</div></footer>
+  `;
+
+  document.getElementById('groupSel').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.g) { state.group = b.dataset.g; render(); } };
+  document.getElementById('metricSel').onclick = e => { const b = e.target.closest('button'); if (b) { state.metric = b.dataset.m === 'время' ? 'время' : 'out'; render(); } };
+  document.getElementById('projSort').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.s) { state.projSort = b.dataset.s; render(); } };
+}
+
+document.getElementById('periods').onclick = e => { const b = e.target.closest('button'); if (b) { state.period = +b.dataset.p; render(); } };
+render();
+</script>
+</body>
+</html>

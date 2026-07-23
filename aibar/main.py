@@ -11,6 +11,7 @@ from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QPainter,
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import __version__, config, theme
+from .agentstats import open_stats
 from .geoblock import GeoBlockGuard
 from .help import open_help
 from .polling import poll_all
@@ -99,6 +100,7 @@ class AIBarApp:
         self.widget.refresh_requested.connect(self.poller.poll)
         self.widget.settings_requested.connect(self.show_settings)
         self.widget.help_requested.connect(open_help)
+        self.widget.stats_requested.connect(self.show_stats)
         self.widget.mode_changed.connect(self.set_widget_mode)
         self.widget.set_mini_threshold(float(self.cfg.get("mini_threshold") or 70))
         self.widget.set_mode(self.cfg.get("widget_mode", "full"))
@@ -145,6 +147,8 @@ class AIBarApp:
         self.widget_action = QAction("Виджет поверх окон", menu, checkable=True)
         self.widget_action.setChecked(self.cfg.get("widget_enabled", True))
         self.widget_action.toggled.connect(self.set_widget_enabled)
+        stats_action = QAction("Статистика", menu)
+        stats_action.triggered.connect(self.show_stats)
         settings_action = QAction("Настройки…", menu)
         settings_action.triggered.connect(self.show_settings)
         help_action = QAction("Справка", menu)
@@ -152,6 +156,7 @@ class AIBarApp:
         menu.addAction(open_action)
         menu.addAction(refresh_action)
         menu.addAction(self.widget_action)
+        menu.addAction(stats_action)
         menu.addAction(settings_action)
         menu.addAction(help_action)
 
@@ -171,6 +176,9 @@ class AIBarApp:
         quit_action.triggered.connect(self.app.quit)
         menu.addAction(quit_action)
         return menu
+
+    def show_stats(self) -> None:
+        open_stats(self.cfg)
 
     def show_settings(self) -> None:
         if self._settings_dialog is not None and self._settings_dialog.isVisible():
