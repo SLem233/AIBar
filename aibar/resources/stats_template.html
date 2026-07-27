@@ -147,6 +147,7 @@ function compute() {
   const covered = new Set(dailyRows.map(r => r.session_id));
   let tAct = 0, tIn = 0, tOut = 0, tCache = 0, nSess = 0, nSub = 0;
   const byProj = {}, byAgent = {}, byType = {}, byModel = {}, byDayMap = {}, mtx = {}, outMap = {};
+  const subTok = {}; // токены субагентов, приплюсовываются к родительской сессии в таблице
   for (const s of sess) {
     const sub = isSub(s);
     const inTok = (s.input_tokens || 0) + (s.cache_creation_tokens || 0);
@@ -154,7 +155,12 @@ function compute() {
     const act = s.time_reliable ? (s.active_seconds || 0) : 0;
     const proj = s.project || 'Вне реестра';
     tIn += inTok; tOut += out; tCache += s.cache_read_tokens || 0;
-    if (!sub) { tAct += act; nSess++; } else { nSub++; }
+    if (!sub) { tAct += act; nSess++; } else {
+      nSub++;
+      const pid = s.session_id.split(':agent-')[0];
+      const t = subTok[pid] || (subTok[pid] = { in: 0, out: 0 });
+      t.in += inTok; t.out += out;
+    }
     const bump = (map, key) => {
       const m = map[key] || (map[key] = { act: 0, in: 0, out: 0, sess: 0 });
       m.in += inTok; m.out += out;
@@ -188,7 +194,7 @@ function compute() {
     if (r.time_reliable) dm.act += r.active_seconds || 0;
     dm.out += r.output_tokens || 0;
   }
-  return { sess, todayKey, cutKey, tAct, tIn, tOut, tCache, nSess, nSub, byProj, byAgent, byType, byModel, byDayMap, mtx, outMap, maxTs };
+  return { sess, todayKey, cutKey, tAct, tIn, tOut, tCache, nSess, nSub, byProj, byAgent, byType, byModel, byDayMap, mtx, outMap, subTok, maxTs };
 }
 
 /* Группировка дневных срезов: день / неделя (с понедельника) / месяц */
@@ -344,14 +350,14 @@ function render() {
         <table class="table">
           <thead><tr><th>Дата</th><th>Проект</th><th>Агент</th><th>Сессия</th><th style="text-align:right;">Время</th><th style="text-align:right;">in</th><th style="text-align:right;">out</th></tr></thead>
           <tbody>
-            ${recent.map(s => { const d = mskDay(s.last_ts); const title = (s.title || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 90) || '(без заголовка)'; return `<tr>
+            ${recent.map(s => { const d = mskDay(s.last_ts); const ex = c.subTok[s.session_id] || { in: 0, out: 0 }; const title = (s.title || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 90) || '(без заголовка)'; return `<tr>
               <td class="tnum" style="white-space:nowrap;">${d.slice(8, 10)}.${d.slice(5, 7)}</td>
               <td style="white-space:nowrap;">${esc(s.project || '—')}</td>
               <td style="white-space:nowrap;color:var(--color-neutral-700);">${esc(agentName(s.agent))}</td>
               <td style="font-size:14px;color:var(--color-neutral-800);max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(title)}</td>
               <td class="tnum" style="text-align:right;white-space:nowrap;">${s.time_reliable ? fmtH(s.active_seconds || 0) : '—'}</td>
-              <td class="tnum" style="text-align:right;white-space:nowrap;">${fmtTok((s.input_tokens || 0) + (s.cache_creation_tokens || 0))}</td>
-              <td class="tnum" style="text-align:right;white-space:nowrap;">${fmtTok(s.output_tokens || 0)}</td></tr>`; }).join('')}
+              <td class="tnum" style="text-align:right;white-space:nowrap;">${fmtTok((s.input_tokens || 0) + (s.cache_creation_tokens || 0) + ex.in)}</td>
+              <td class="tnum" style="text-align:right;white-space:nowrap;">${fmtTok((s.output_tokens || 0) + ex.out)}</td></tr>`; }).join('')}
           </tbody>
         </table>
       </div>

@@ -204,6 +204,14 @@ def test_outliers_since_defaults_to_empty(ledger, tmp_path):
     assert '"outliers_since": ""' in out.read_text(encoding="utf-8")
 
 
+def test_recent_sessions_roll_up_subagent_tokens(ledger, tmp_path):
+    """Строка сессии включает токены её субагентов (иначе не сходится с «Проектами»)."""
+    out = tmp_path / "stats.html"
+    agentstats.generate(ledger, out)
+    text = out.read_text(encoding="utf-8")
+    assert "subTok" in text and ":agent-')[0]" in text
+
+
 def test_chart_gap_adapts_to_bucket_count(ledger, tmp_path):
     """Баг приёмки 23.07: «всё время» по дням — сотни столбиков с зазором 3px
     шире страницы, график уезжал за край с горизонтальным скроллом."""
