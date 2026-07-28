@@ -119,6 +119,7 @@ function fmtTok(n) {
   return String(n);
 }
 const agentName = a => a === 'claude-code' ? 'Claude Code' : a === 'codex' ? 'Codex' : a === 'cursor' ? 'Cursor' : a;
+const fmtDay = ts => { const k = mskDay(ts); return k.slice(8, 10) + '.' + k.slice(5, 7) + '.' + k.slice(0, 4); };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 /* Имя проекта → ссылка на его HTML-карточку рядом (если карточка есть).
    Обычная ссылка: открывается в этом же окне, правой кнопкой — новая
@@ -310,6 +311,8 @@ function render() {
   const cell = m => m ? (fmtH(m.act) + ' · ' + fmtTok(m.out)) : '—';
   const recent = c.sess.filter(s => !s.session_id.includes(':agent-')).sort((a, b) => b.last_ts.localeCompare(a.last_ts)).slice(0, state.rows);
   const outliers = Object.entries(c.outMap).sort((a, b) => b[1].act - a[1].act).slice(0, 10);
+  // напоминание о ретроспективе — по всем проектам, не по выбранному периоду
+  const retro = RAW.retro || [];
   const upd = new Date(new Date(c.maxTs).getTime() + MSK).toISOString().slice(0, 16).replace('T', ' ') + ' МСК';
 
   body.innerHTML = `
@@ -407,6 +410,11 @@ function render() {
       <h2 class="sec" style="margin-bottom:var(--space-2);">Вне реестра</h2>
       <p style="font-size:14.5px;color:var(--color-neutral-700);margin:0 0 var(--space-4);max-width:70ch;">Сессии из папок, не привязанных к проектам. Чтобы учесть — зарегистрируйте папку: <span class="mono" style="font-size:13.5px;">agentpulse add-project "&lt;Имя&gt;" "&lt;путь&gt;"</span> или допишите путь в <span class="mono" style="font-size:13.5px;">aliases</span>.</p>
       ${outliers.map(([p, v]) => `<div class="krow"><div class="mono" style="font-size:13.5px;color:var(--color-neutral-800);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p)}</div><div class="r tnum">${v.sess} сес. · ${fmtH(v.act)} · ${fmtTok(v.out)} out</div></div>`).join('')}
+    </section>` : ''}
+    ${retro.length ? `<div class="hr"></div><section>
+      <h2 class="sec" style="margin-bottom:var(--space-2);">Материал для ретроспективы</h2>
+      <p style="font-size:14.5px;color:var(--color-neutral-700);margin:0 0 var(--space-4);max-width:70ch;">В этих проектах есть сессии новее последней ретроспективы — «Инсайты» и «Паттерны» в карточках отстали. Пополнить: <span class="mono" style="font-size:13.5px;">/session-retrospective</span> (статус проекта — <span class="mono" style="font-size:13.5px;">/project-status</span>).</p>
+      ${retro.map(r => `<div class="krow"><div>${projName(r.project)}</div><div class="r tnum">последняя сессия ${fmtDay(r.last_ts)} · ретроспектива ${r.since ? fmtDay(r.since) : 'не проводилась'}</div></div>`).join('')}
     </section>` : ''}
     <footer class="bot tnum"><div>Источник: ${esc(RAW.source || '—')} · сгенерировано AIBar ${esc(RAW.generated_at || '')}</div><div>Последнее событие ${upd}</div></footer>
   `;

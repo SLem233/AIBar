@@ -159,6 +159,46 @@ def test_card_pages_removed_for_deleted_cards(ledger, vault, tmp_path):
     assert not (tmp_path / "cards" / "AIBar.html").exists()
 
 
+def add_retro_marks(db_path, marks):
+    """Отметки о проведённой ретроспективе, как их пишет AgentPulse."""
+    db = sqlite3.connect(db_path)
+    db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    db.executemany(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+        [(f"retro_done:{name}", ts) for name, ts in marks.items()],
+    )
+    db.commit()
+    db.close()
+
+
+def test_retro_lists_projects_with_newer_sessions(ledger):
+    add_retro_marks(ledger, {"AIBar": "2026-07-19T00:00:00+00:00"})
+    data = agentstats.load_data(ledger)
+    assert [r["project"] for r in data["retro"]] == ["AIBar"]
+    assert data["retro"][0]["since"] == "2026-07-19T00:00:00+00:00"
+
+
+def test_retro_skips_projects_already_covered(ledger):
+    add_retro_marks(ledger, {"AIBar": "2026-07-21T00:00:00+00:00"})
+    data = agentstats.load_data(ledger)
+    assert data["retro"] == []
+
+
+def test_retro_includes_projects_never_reviewed(ledger):
+    data = agentstats.load_data(ledger)  # таблицы meta нет вовсе
+    assert [r["project"] for r in data["retro"]] == ["AIBar"]
+    assert data["retro"][0]["since"] == ""
+
+
+def test_stats_page_renders_retro_block(ledger, tmp_path):
+    add_retro_marks(ledger, {"AIBar": "2026-07-19T00:00:00+00:00"})
+    out = tmp_path / "stats.html"
+    agentstats.generate(ledger, out)
+    text = out.read_text(encoding="utf-8")
+    assert "RAW.retro" in text
+    assert "/session-retrospective" in text
+
+
 def test_load_data_exports_sessions_and_daily(ledger):
     data = agentstats.load_data(ledger)
     assert len(data["sessions"]) == 3

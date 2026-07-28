@@ -48,6 +48,9 @@ SELECT agent, session_id, date, model, output_tokens
 FROM daily_models
 """
 
+# Отметки о проведённых ретроспективах: retro_done:<проект> -> last_ts на тот момент
+_RETRO_SQL = "SELECT key, value FROM meta WHERE key LIKE 'retro_done:%'"
+
 
 def _resource(name: str) -> Path:
     if getattr(sys, "frozen", False):  # PyInstaller: unpacked next to the module tree
@@ -129,6 +132,26 @@ def _write_cards(data: dict, out_path: Path, cards_dir: Path | None) -> None:
         (cards_out / f"{name}.html").write_text(page, encoding="utf-8")
 
 
+def _retro_pending(sessions: list[dict], marks: dict[str, str]) -> list[dict]:
+    """Проекты, у которых есть сессии новее последней ретроспективы.
+
+    Повторяет правило AgentPulse (`projects_needing_retro`): смысловые секции
+    карточек пишутся руками, поэтому дашборд напоминает, где накопился
+    материал для `/session-retrospective`.
+    """
+    last_by: dict[str, str] = {}
+    for s in sessions:
+        name, ts = s.get("project"), s.get("last_ts") or ""
+        if name and ts > last_by.get(name, ""):
+            last_by[name] = ts
+    pending = [
+        {"project": name, "last_ts": last, "since": marks.get(name) or ""}
+        for name, last in last_by.items()
+        if name not in marks or last > marks[name]
+    ]
+    return sorted(pending, key=lambda r: r["last_ts"], reverse=True)
+
+
 def load_data(
     db_path: Path | str,
     cards_dir: Path | str | None = None,
@@ -147,6 +170,12 @@ def load_data(
             daily_models = [dict(r) for r in con.execute(_DAILY_MODELS_SQL)]
         except sqlite3.Error:
             daily_models = []  # ledger старой версии — модели возьмём из сессий
+        try:
+            marks = {
+                r["key"].split(":", 1)[1]: r["value"] for r in con.execute(_RETRO_SQL)
+            }
+        except sqlite3.Error:
+            marks = {}  # ретроспектив ещё не было — напомним про все проекты
     finally:
         con.close()
     projects = {s["project"] for s in sessions if s["project"]}
@@ -154,6 +183,7 @@ def load_data(
         "sessions": sessions,
         "daily": daily,
         "daily_models": daily_models,
+        "retro": _retro_pending(sessions, marks),
         "cards": _card_links(projects, Path(cards_dir) if cards_dir else None),
         # Сессии «вне реестра» старше этой отметки помечены как «не для
         # анализа» и в одноимённый список не попадают (обнуление 23.07.2026)
