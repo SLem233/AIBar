@@ -36,9 +36,16 @@ SELECT agent, session_id, project, cwd, first_ts, last_ts, active_seconds,
 FROM sessions
 """
 
+# Посуточные срезы: по ним считается вклад сессии в выбранный период
 _DAILY_SQL = """
-SELECT session_id, date, active_seconds, output_tokens, time_reliable
+SELECT agent, session_id, date, active_seconds, input_tokens, output_tokens,
+       cache_read_tokens, cache_creation_tokens, time_reliable
 FROM daily_activity
+"""
+
+_DAILY_MODELS_SQL = """
+SELECT agent, session_id, date, model, output_tokens
+FROM daily_models
 """
 
 
@@ -136,12 +143,17 @@ def load_data(
         con.row_factory = sqlite3.Row
         sessions = [dict(r) for r in con.execute(_SESSIONS_SQL)]
         daily = [dict(r) for r in con.execute(_DAILY_SQL)]
+        try:
+            daily_models = [dict(r) for r in con.execute(_DAILY_MODELS_SQL)]
+        except sqlite3.Error:
+            daily_models = []  # ledger старой версии — модели возьмём из сессий
     finally:
         con.close()
     projects = {s["project"] for s in sessions if s["project"]}
     return {
         "sessions": sessions,
         "daily": daily,
+        "daily_models": daily_models,
         "cards": _card_links(projects, Path(cards_dir) if cards_dir else None),
         # Сессии «вне реестра» старше этой отметки помечены как «не для
         # анализа» и в одноимённый список не попадают (обнуление 23.07.2026)

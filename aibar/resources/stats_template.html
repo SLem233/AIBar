@@ -107,7 +107,7 @@
 
 const RAW = __AGENTPULSE_DATA__;
 
-const state = { sessions: RAW.sessions, daily: RAW.daily || [], period: 30, group: 'day', projSort: 'act', metric: 'время', rows: 12 };
+const state = { sessions: RAW.sessions, daily: RAW.daily || [], dailyModels: RAW.daily_models || [], period: 30, group: 'day', projSort: 'act', metric: 'время', rows: 12 };
 
 const MSK = 3 * 3600e3;
 const mskDay = ts => new Date(new Date(ts).getTime() + MSK).toISOString().slice(0, 10);
@@ -132,37 +132,69 @@ const projName = name => {
 
 /* Формулы AgentPulse: субагент (id с ":agent-") не считается сессией и не
    даёт активного времени, но его токены учитываются. in = input + cache
-   creation; cache read — отдельно. Границы дня — МСК. */
+   creation; cache read — отдельно. Границы дня — МСК.
+
+   Вклад сессии в выбранный период берётся из посуточных срезов
+   (daily_activity): сессия, начатая до окна, приносит только ту работу, что
+   была внутри окна. У старых сессий срезов нет — для них считается итог
+   целиком, если последняя активность попала в окно (приближение, иначе они
+   пропали бы совсем). */
 function compute() {
-  const { period, sessions: all, daily } = state;
+  const { period, sessions: all, daily, dailyModels } = state;
   const isSub = s => s.session_id.includes(':agent-');
   let maxTs = '';
   for (const s of all) if (s.last_ts > maxTs) maxTs = s.last_ts;
   const todayKey = mskDay(maxTs || new Date().toISOString());
   const cutoffMs = period ? (new Date(todayKey + 'T00:00:00+03:00').getTime() - (period - 1) * 86400e3) : 0;
   const cutKey = period ? mskDay(new Date(cutoffMs).toISOString()) : '';
-  const sess = all.filter(s => !period || new Date(s.last_ts).getTime() >= cutoffMs);
+  const inWin = date => !period || date >= cutKey;
 
-  const dailyRows = (daily || []).filter(r => !r.session_id.includes(':agent-'));
-  const covered = new Set(dailyRows.map(r => r.session_id));
+  const byKey = {};  // agent||session_id -> дневные срезы сессии
+  for (const r of daily) {
+    const k = r.agent + '||' + r.session_id;
+    (byKey[k] || (byKey[k] = [])).push(r);
+  }
+  const modelKeys = new Set(dailyModels.map(r => r.agent + '||' + r.session_id));
+
+  const sess = [];  // сессии с активностью внутри окна
   let tAct = 0, tIn = 0, tOut = 0, tCache = 0, nSess = 0, nSub = 0;
   const byProj = {}, byAgent = {}, byType = {}, byModel = {}, byDayMap = {}, mtx = {}, outMap = {};
   const subTok = {}; // токены субагентов, приплюсовываются к родительской сессии в таблице
-  for (const s of sess) {
+  const winTok = {}; // вклад сессии в период — для таблицы «Последние сессии»
+  for (const s of all) {
+    const key = s.agent + '||' + s.session_id;
+    const rows = byKey[key];
+    let inTok = 0, out = 0, cache = 0, act = 0;
+    if (rows) {
+      const win = rows.filter(r => inWin(r.date));
+      if (!win.length) continue;  // внутри окна эта сессия не работала
+      for (const r of win) {
+        inTok += (r.input_tokens || 0) + (r.cache_creation_tokens || 0);
+        out += r.output_tokens || 0;
+        cache += r.cache_read_tokens || 0;
+        if (r.time_reliable) act += r.active_seconds || 0;
+      }
+    } else {
+      if (period && new Date(s.last_ts).getTime() < cutoffMs) continue;
+      inTok = (s.input_tokens || 0) + (s.cache_creation_tokens || 0);
+      out = s.output_tokens || 0;
+      cache = s.cache_read_tokens || 0;
+      act = s.time_reliable ? (s.active_seconds || 0) : 0;
+    }
+    sess.push(s);
+    winTok[key] = { act, in: inTok, out };
+
     const sub = isSub(s);
-    const inTok = (s.input_tokens || 0) + (s.cache_creation_tokens || 0);
-    const out = s.output_tokens || 0;
-    const act = s.time_reliable ? (s.active_seconds || 0) : 0;
     const proj = s.project || 'Вне реестра';
-    tIn += inTok; tOut += out; tCache += s.cache_read_tokens || 0;
+    tIn += inTok; tOut += out; tCache += cache;
     if (!sub) { tAct += act; nSess++; } else {
       nSub++;
       const pid = s.session_id.split(':agent-')[0];
       const t = subTok[pid] || (subTok[pid] = { in: 0, out: 0 });
       t.in += inTok; t.out += out;
     }
-    const bump = (map, key) => {
-      const m = map[key] || (map[key] = { act: 0, in: 0, out: 0, sess: 0 });
+    const bump = (map, k) => {
+      const m = map[k] || (map[k] = { act: 0, in: 0, out: 0, sess: 0 });
       m.in += inTok; m.out += out;
       if (!sub) { m.act += act; m.sess++; }
     };
@@ -176,11 +208,14 @@ function compute() {
       const om = outMap[dir] || (outMap[dir] = { act: 0, out: 0, sess: 0 });
       om.act += act; om.out += out; om.sess++;
     }
-    try { for (const [m, v] of Object.entries(JSON.parse(s.models_json || '{}'))) { if (m !== '<synthetic>') byModel[m] = (byModel[m] || 0) + v; } } catch (e) {}
+    // модели: у покрытых сессий берём из дневных срезов (ниже), иначе из итога
+    if (!modelKeys.has(key)) {
+      try { for (const [m, v] of Object.entries(JSON.parse(s.models_json || '{}'))) { if (m !== '<synthetic>') byModel[m] = (byModel[m] || 0) + v; } } catch (e) {}
+    }
     if (!sub && s.first_ts) {
       const fk = mskDay(s.first_ts);
       (byDayMap[fk] || (byDayMap[fk] = { act: 0, out: 0, sess: 0 })).sess++;
-      if (s.time_reliable && !covered.has(s.session_id)) {
+      if (!rows && s.time_reliable) {  // без срезов — размазываем по дням сессии
         const lastKey = mskDay(s.last_ts), keys = [];
         for (let t = new Date(s.first_ts).getTime(); ; t += 86400e3) { const k = mskDay(new Date(t).toISOString()); keys.push(k); if (k >= lastKey) break; if (keys.length > 120) break; }
         const share = act / keys.length, oShare = out / keys.length;
@@ -188,13 +223,19 @@ function compute() {
       }
     }
   }
-  for (const r of dailyRows) {
-    if (period && r.date < cutKey) continue;
+  for (const r of daily) {  // точные дни для графика
+    if (!inWin(r.date)) continue;
     const dm = byDayMap[r.date] || (byDayMap[r.date] = { act: 0, out: 0, sess: 0 });
-    if (r.time_reliable) dm.act += r.active_seconds || 0;
+    // время субагентов не считается (как и везде), токены — считаются,
+    // иначе сумма столбиков не сходится с KPI
+    if (r.time_reliable && !r.session_id.includes(':agent-')) dm.act += r.active_seconds || 0;
     dm.out += r.output_tokens || 0;
   }
-  return { sess, todayKey, cutKey, tAct, tIn, tOut, tCache, nSess, nSub, byProj, byAgent, byType, byModel, byDayMap, mtx, outMap, subTok, maxTs };
+  for (const r of dailyModels) {  // точные модели по дням
+    if (!inWin(r.date) || r.model === '<synthetic>') continue;
+    byModel[r.model] = (byModel[r.model] || 0) + (r.output_tokens || 0);
+  }
+  return { sess, todayKey, cutKey, tAct, tIn, tOut, tCache, nSess, nSub, byProj, byAgent, byType, byModel, byDayMap, mtx, outMap, subTok, winTok, maxTs };
 }
 
 /* Группировка дневных срезов: день / неделя (с понедельника) / месяц */
@@ -350,14 +391,14 @@ function render() {
         <table class="table">
           <thead><tr><th>Дата</th><th>Проект</th><th>Агент</th><th>Сессия</th><th style="text-align:right;">Время</th><th style="text-align:right;">in</th><th style="text-align:right;">out</th></tr></thead>
           <tbody>
-            ${recent.map(s => { const d = mskDay(s.last_ts); const ex = c.subTok[s.session_id] || { in: 0, out: 0 }; const title = (s.title || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 90) || '(без заголовка)'; return `<tr>
+            ${recent.map(s => { const d = mskDay(s.last_ts); const ex = c.subTok[s.session_id] || { in: 0, out: 0 }; const w = c.winTok[s.agent + '||' + s.session_id] || { act: 0, in: 0, out: 0 }; const title = (s.title || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 90) || '(без заголовка)'; return `<tr>
               <td class="tnum" style="white-space:nowrap;">${d.slice(8, 10)}.${d.slice(5, 7)}</td>
               <td style="white-space:nowrap;">${esc(s.project || '—')}</td>
               <td style="white-space:nowrap;color:var(--color-neutral-700);">${esc(agentName(s.agent))}</td>
               <td style="font-size:14px;color:var(--color-neutral-800);max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(title)}</td>
-              <td class="tnum" style="text-align:right;white-space:nowrap;">${s.time_reliable ? fmtH(s.active_seconds || 0) : '—'}</td>
-              <td class="tnum" style="text-align:right;white-space:nowrap;">${fmtTok((s.input_tokens || 0) + (s.cache_creation_tokens || 0) + ex.in)}</td>
-              <td class="tnum" style="text-align:right;white-space:nowrap;">${fmtTok((s.output_tokens || 0) + ex.out)}</td></tr>`; }).join('')}
+              <td class="tnum" style="text-align:right;white-space:nowrap;">${s.time_reliable ? fmtH(w.act) : '—'}</td>
+              <td class="tnum" style="text-align:right;white-space:nowrap;">${fmtTok(w.in + ex.in)}</td>
+              <td class="tnum" style="text-align:right;white-space:nowrap;">${fmtTok(w.out + ex.out)}</td></tr>`; }).join('')}
           </tbody>
         </table>
       </div>
