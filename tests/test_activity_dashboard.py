@@ -70,6 +70,9 @@ SESSIONS = [
     # целиком вне окна 7 дней
     ("codex", "D", "Q", "2026-07-05T09:00:00+00:00", "2026-07-05T10:00:00+00:00",
      1200, "low", "never"),
+    # без проекта — на дашборде это «Вне реестра»
+    ("claude-code", "E", None, "2026-07-25T11:00:00+00:00", "2026-07-25T11:30:00+00:00",
+     120, "high", "auto"),
 ]
 
 DAILY = [
@@ -79,6 +82,7 @@ DAILY = [
     ("claude-code", "A:agent-x", "2026-07-25", 0, 0),
     ("claude-code", "B", "2026-07-24", 300, 0),
     ("codex", "D", "2026-07-05", 1200, 1),
+    ("claude-code", "E", "2026-07-25", 120, 0),
 ]
 
 DAILY_TOOLS = [
@@ -88,6 +92,7 @@ DAILY_TOOLS = [
     ("claude-code", "A", "2026-07-25", "Edit", "edit", 4),
     ("claude-code", "A:agent-x", "2026-07-25", "Read", "read", 3),
     ("codex", "D", "2026-07-05", "exec", "shell", 7),            # вне окна 7 дней
+    ("claude-code", "E", "2026-07-25", "WebSearch", "web", 2),
 ]
 
 
@@ -171,9 +176,9 @@ class TestPageAggregation:
         agentstats.generate(build_db(tmp / "ledger.db"), out)
         return out
 
-    def compute(self, page, period):
+    def compute(self, page, period, project=""):
         run = subprocess.run(
-            [NODE, str(PROBE), str(page), str(period)],
+            [NODE, str(PROBE), str(page), str(period), project],
             capture_output=True, text=True, encoding="utf-8",
         )
         assert run.returncode == 0, run.stderr
@@ -182,8 +187,8 @@ class TestPageAggregation:
     def test_categories_respect_window(self, page):
         c = self.compute(page, 7)
         # 01.07 (Read×50) и 05.07 (exec×7) вне окна
-        assert c["byCat"] == {"shell": 10, "edit": 4, "read": 3}
-        assert c["tCalls"] == 17
+        assert c["byCat"] == {"shell": 10, "edit": 4, "read": 3, "web": 2}
+        assert c["tCalls"] == 19
 
     def test_subagent_tool_calls_are_counted(self, page):
         """Время субагента не считается, а его работа инструментами — считается."""
@@ -192,12 +197,12 @@ class TestPageAggregation:
 
     def test_categories_all_time(self, page):
         c = self.compute(page, 0)
-        assert c["byCat"] == {"shell": 17, "edit": 4, "read": 53}
-        assert c["tCalls"] == 74
+        assert c["byCat"] == {"shell": 17, "edit": 4, "read": 53, "web": 2}
+        assert c["tCalls"] == 76
 
     def test_raw_tools_breakdown(self, page):
         c = self.compute(page, 0)
-        assert c["byTool"] == {"Read": 53, "Bash": 10, "Edit": 4, "exec": 7}
+        assert c["byTool"] == {"Read": 53, "Bash": 10, "Edit": 4, "exec": 7, "WebSearch": 2}
 
     def test_compactions_respect_window(self, page):
         assert self.compute(page, 7)["tCompact"] == 1
@@ -205,20 +210,67 @@ class TestPageAggregation:
 
     def test_effort_counts_sessions_not_subagents(self, page):
         c = self.compute(page, 7)
-        assert c["byEffort"] == {"xhigh": 1}  # A; субагент A:agent-x не в счёт
+        assert c["byEffort"] == {"xhigh": 1, "high": 1}  # субагент A:agent-x не в счёт
 
     def test_effort_all_time(self, page):
         c = self.compute(page, 0)
-        assert c["byEffort"] == {"xhigh": 1, "low": 1}
+        assert c["byEffort"] == {"xhigh": 1, "low": 1, "high": 1}
 
     def test_approval_modes(self, page):
         c = self.compute(page, 7)
-        assert c["byApproval"] == {"auto": 1, "acceptEdits": 1}
+        assert c["byApproval"] == {"auto": 2, "acceptEdits": 1}
 
     def test_calls_sum_matches_categories(self, page):
         """Сумма по категориям обязана сходиться с суммой по сырым именам."""
         c = self.compute(page, 0)
         assert sum(c["byCat"].values()) == sum(c["byTool"].values()) == c["tCalls"]
+
+    # ---- профиль работы по проекту ----------------------------------------
+
+    def test_project_list_for_selector(self, page):
+        """Список проектов строится по вызовам в окне, крупные — первыми."""
+        c = self.compute(page, 0)
+        assert c["actProjects"] == [
+            {"name": "P", "calls": 67},              # A(64) + субагент(3)
+            {"name": "Q", "calls": 7},
+            {"name": "Вне реестра", "calls": 2},
+        ]
+
+    def test_filter_narrows_categories(self, page):
+        c = self.compute(page, 0, "P")
+        assert c["byCat"] == {"read": 53, "shell": 10, "edit": 4}
+        assert c["tCalls"] == 67
+        assert "exec" not in c["byTool"]  # это Q
+
+    def test_filter_includes_subagents_of_that_project(self, page):
+        """Субагент наследует проект родителя — его вызовы остаются в профиле."""
+        assert self.compute(page, 0, "P")["byCat"]["read"] == 53  # 50 родителя + 3 субагента
+
+    def test_filter_narrows_compactions(self, page):
+        assert self.compute(page, 0, "P")["tCompact"] == 3
+        assert self.compute(page, 0, "Q")["tCompact"] == 1
+
+    def test_filter_narrows_effort_and_approval(self, page):
+        c = self.compute(page, 0, "Q")
+        assert c["byEffort"] == {"low": 1}
+        assert c["byApproval"] == {"never": 1}
+
+    def test_sessions_without_project_are_filterable(self, page):
+        c = self.compute(page, 0, "Вне реестра")
+        assert c["byCat"] == {"web": 2}
+        assert c["byEffort"] == {"high": 1}
+
+    def test_filter_does_not_leak_into_page_totals(self, page):
+        """Фильтр — только для профиля работы; KPI и проекты остаются общими."""
+        c = self.compute(page, 0, "Q")
+        assert c["nSess"] == 4          # все сессии периода, а не только Q
+        assert set(c["byProj"]) == {"P", "Q", "Вне реестра"}
+
+    def test_unknown_project_falls_back_to_all(self, page):
+        """Проект без вызовов в выбранном окне не должен обнулять секцию."""
+        c = self.compute(page, 7, "Q")  # Q целиком вне окна 7 дней
+        assert c["actProject"] == ""
+        assert c["tCalls"] == 19
 
     def test_mcp_tool_names_are_shortened(self, page):
         """`mcp__сервер__инструмент` — 40+ символов, в узкой колонке нечитаемо."""

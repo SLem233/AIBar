@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const [, , pagePath, periodArg] = process.argv;
+const [, , pagePath, periodArg, projectArg] = process.argv;
 const html = fs.readFileSync(pagePath, 'utf8');
 const script = html.slice(
   html.indexOf('<script>') + '<script>'.length,
@@ -27,6 +27,7 @@ fs.writeFileSync(bundle, script + '\nmodule.exports = { compute, state, toolLabe
 const api = require(bundle);
 
 api.state.period = Number(periodArg);
+api.state.actProject = projectArg || '';
 const c = api.compute();
 
 console.log(JSON.stringify({
@@ -38,6 +39,7 @@ console.log(JSON.stringify({
   cutKey: c.cutKey, todayKey: c.todayKey,
   byCat: c.byCat, byTool: c.byTool, tCalls: c.tCalls,
   tCompact: c.tCompact, byEffort: c.byEffort, byApproval: c.byApproval,
+  actProject: c.actProject, actProjects: c.actProjects,
   toolLabels: [
     api.toolLabel('mcp__chrome-devtools__get_network_request'),
     api.toolLabel('mcp__claude_ai_Gmail__search_threads'),

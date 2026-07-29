@@ -43,6 +43,9 @@
   .sort button { padding: 4px 11px; white-space: nowrap; font-family: var(--font-body); font-size: 13px; cursor: pointer; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--color-neutral-600); }
   .sort button:hover { color: var(--color-accent-600); }
   .sort button.on { background: var(--color-accent-100); color: var(--color-accent-800); }
+  /* Проектов бывает полтора десятка — кнопочный ряд не влезает, нужен список */
+  select#actProj { padding: 4px 8px; font-family: var(--font-body); font-size: 13px; cursor: pointer; color: var(--color-neutral-700); background: transparent; border: 1px solid var(--color-divider); border-radius: var(--radius-sm); max-width: 40ch; }
+  select#actProj:hover { color: var(--color-accent-600); border-color: var(--color-accent-300); }
   header.top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-6); border-bottom: 1px solid var(--color-text); padding-bottom: var(--space-4); flex-wrap: wrap; }
   .kpis { display: grid; grid-template-columns: repeat(5, 1fr); margin-top: var(--space-6); }
   .kpi { padding: 0 20px; }
@@ -107,7 +110,7 @@
 
 const RAW = __AGENTPULSE_DATA__;
 
-const state = { sessions: RAW.sessions, daily: RAW.daily || [], dailyModels: RAW.daily_models || [], dailyTools: RAW.daily_tools || [], period: 30, group: 'day', projSort: 'act', metric: 'время', rows: 12 };
+const state = { sessions: RAW.sessions, daily: RAW.daily || [], dailyModels: RAW.daily_models || [], dailyTools: RAW.daily_tools || [], period: 30, group: 'day', projSort: 'act', metric: 'время', rows: 12, actProject: '' };
 
 /* Категории работы AgentPulse: сырые имена инструментов у агентов разные
    (Bash против exec), сравнимы только категории. */
@@ -171,6 +174,26 @@ function compute() {
   }
   const modelKeys = new Set(dailyModels.map(r => r.agent + '||' + r.session_id));
 
+  /* Профиль работы можно сузить до одного проекта. Проект берётся из строки
+     сессии, а не из колонки дневного среза: так секция называет проекты ровно
+     теми же именами, что и вся остальная страница (включая «Вне реестра»),
+     и субагент автоматически наследует проект родителя. */
+  const projOf = {};
+  for (const s of all) projOf[s.agent + '||' + s.session_id] = s.project || 'Вне реестра';
+  const projOfRow = r => projOf[r.agent + '||' + r.session_id] || 'Вне реестра';
+
+  const callsByProj = {};  // для селектора: список не схлопывается после выбора
+  for (const r of dailyTools) {
+    if (!inWin(r.date)) continue;
+    callsByProj[projOfRow(r)] = (callsByProj[projOfRow(r)] || 0) + (r.count || 0);
+  }
+  const actProjects = Object.entries(callsByProj)
+    .sort((a, b) => b[1] - a[1]).map(([name, calls]) => ({ name, calls }));
+  // Проект без вызовов в выбранном окне (сменили период) обнулил бы секцию —
+  // молча возвращаемся ко «всем проектам»; render синхронизирует селектор.
+  const actProject = callsByProj[state.actProject] ? state.actProject : '';
+  const keep = r => !actProject || projOfRow(r) === actProject;
+
   const sess = [];  // сессии с активностью внутри окна
   let tAct = 0, tIn = 0, tOut = 0, tCache = 0, nSess = 0, nSub = 0;
   const byProj = {}, byAgent = {}, byType = {}, byModel = {}, byDayMap = {}, mtx = {}, outMap = {};
@@ -204,7 +227,7 @@ function compute() {
     const proj = s.project || 'Вне реестра';
     // effort и режим одобрения — свойства сессии целиком, у субагента они
     // унаследованы от родителя и удвоили бы картину
-    if (!sub) {
+    if (!sub && (!actProject || proj === actProject)) {
       if (s.effort) byEffort[s.effort] = (byEffort[s.effort] || 0) + 1;
       if (s.approval_mode) byApproval[s.approval_mode] = (byApproval[s.approval_mode] || 0) + 1;
     }
@@ -257,20 +280,18 @@ function compute() {
     if (!inWin(r.date) || r.model === '<synthetic>') continue;
     byModel[r.model] = (byModel[r.model] || 0) + (r.output_tokens || 0);
   }
-  /* Чем занимались: вызовы инструментов по дням. Работа субагентов считается
-     (как и их токены) — делегированная правка остаётся правкой. */
   const byCat = {}, byTool = {};
   let tCalls = 0;
   for (const r of dailyTools) {
-    if (!inWin(r.date)) continue;
+    if (!inWin(r.date) || !keep(r)) continue;
     const n = r.count || 0;
     byCat[r.category] = (byCat[r.category] || 0) + n;
     byTool[r.tool] = (byTool[r.tool] || 0) + n;
     tCalls += n;
   }
   let tCompact = 0;  // метрика трения: сколько раз упёрлись в окно контекста
-  for (const r of daily) if (inWin(r.date)) tCompact += r.compactions || 0;
-  return { sess, todayKey, cutKey, tAct, tIn, tOut, tCache, nSess, nSub, byProj, byAgent, byType, byModel, byDayMap, mtx, outMap, subTok, winTok, maxTs, byCat, byTool, tCalls, tCompact, byEffort, byApproval };
+  for (const r of daily) if (inWin(r.date) && keep(r)) tCompact += r.compactions || 0;
+  return { sess, todayKey, cutKey, tAct, tIn, tOut, tCache, nSess, nSub, byProj, byAgent, byType, byModel, byDayMap, mtx, outMap, subTok, winTok, maxTs, byCat, byTool, tCalls, tCompact, byEffort, byApproval, actProject, actProjects };
 }
 
 /* Группировка дневных срезов: день / неделя (с понедельника) / месяц */
@@ -424,7 +445,13 @@ function render() {
     ${c.tCalls ? `<div class="hr"></div><section>
       <div style="display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-4);flex-wrap:wrap;">
         <h2 class="sec">Чем занимались</h2>
-        <div class="tnum" style="font-size:13.5px;color:var(--color-neutral-600);">${fmtN(c.tCalls)} вызовов${c.tCompact ? ' · упирались в контекст ' + c.tCompact + ' раз' : ''}</div>
+        <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;">
+          ${c.actProjects.length > 1 ? `<select id="actProj" title="Профиль работы по проекту">
+            <option value=""${c.actProject ? '' : ' selected'}>все проекты</option>
+            ${c.actProjects.map(p => `<option value="${esc(p.name)}"${p.name === c.actProject ? ' selected' : ''}>${esc(p.name)} · ${fmtN(p.calls)}</option>`).join('')}
+          </select>` : ''}
+          <div class="tnum" style="font-size:13.5px;color:var(--color-neutral-600);">${fmtN(c.tCalls)} вызовов${c.tCompact ? ' · упирались в контекст ' + c.tCompact + ' раз' : ''}</div>
+        </div>
       </div>
       <p style="font-size:14.5px;color:var(--color-neutral-700);margin:var(--space-2) 0 var(--space-4);max-width:70ch;">Категории сравнимы между агентами: <span class="mono" style="font-size:13.5px;">Bash</span> у Claude Code и <span class="mono" style="font-size:13.5px;">exec</span> у Codex — одна «оболочка». Работа субагентов учитывается: делегированная правка остаётся правкой.</p>
       <div class="cols">
@@ -501,6 +528,16 @@ function render() {
   document.getElementById('groupSel').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.g) { state.group = b.dataset.g; render(); } };
   document.getElementById('metricSel').onclick = e => { const b = e.target.closest('button'); if (b) { state.metric = b.dataset.m === 'время' ? 'время' : 'out'; render(); } };
   document.getElementById('projSort').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.s) { state.projSort = b.dataset.s; render(); } };
+  // Селектор есть не всегда: при одном проекте (или пустой активности) его не рисуем
+  const actSel = document.getElementById('actProj');
+  if (actSel) actSel.onchange = e => {
+    state.actProject = e.target.value;
+    render();
+    // render() пересобирает body целиком, и страница уезжает наверх — а секция
+    // лежит глубоко: возвращаем её на место, иначе выбор проекта теряет вид.
+    const back = document.getElementById('actProj');
+    if (back && back.scrollIntoView) back.scrollIntoView({ block: 'center' });
+  };
 }
 
 document.getElementById('periods').onclick = e => { const b = e.target.closest('button'); if (b) { state.period = +b.dataset.p; render(); } };
