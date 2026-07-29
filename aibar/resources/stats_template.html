@@ -107,7 +107,18 @@
 
 const RAW = __AGENTPULSE_DATA__;
 
-const state = { sessions: RAW.sessions, daily: RAW.daily || [], dailyModels: RAW.daily_models || [], period: 30, group: 'day', projSort: 'act', metric: 'время', rows: 12 };
+const state = { sessions: RAW.sessions, daily: RAW.daily || [], dailyModels: RAW.daily_models || [], dailyTools: RAW.daily_tools || [], period: 30, group: 'day', projSort: 'act', metric: 'время', rows: 12 };
+
+/* Категории работы AgentPulse: сырые имена инструментов у агентов разные
+   (Bash против exec), сравнимы только категории. */
+const CAT_NAME = { shell: 'Оболочка', edit: 'Правки файлов', read: 'Чтение', search: 'Поиск по коду', web: 'Сеть', agent: 'Делегирование', mcp: 'MCP-инструменты', other: 'Прочее' };
+const catName = k => CAT_NAME[k] || k;
+/* `mcp__chrome-devtools__get_network_request` — 40+ символов одним словом:
+   в узкой колонке нечитаемо и распирает вёрстку. Показываем «сервер: инструмент». */
+const toolLabel = t => {
+  const m = String(t).match(/^mcp__(.+?)__(.+)$/);
+  return m ? m[1] + ': ' + m[2] : t;
+};
 
 const MSK = 3 * 3600e3;
 const mskDay = ts => new Date(new Date(ts).getTime() + MSK).toISOString().slice(0, 10);
@@ -118,6 +129,9 @@ function fmtTok(n) {
   if (n >= 1e3) return Math.round(n / 1e3) + ' тыс';
   return String(n);
 }
+/* Вызовы инструментов — счётные величины, а не объёмы: «14 тыс» здесь врёт,
+   нужно точное число с разрядами. */
+const fmtN = n => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 const agentName = a => a === 'claude-code' ? 'Claude Code' : a === 'codex' ? 'Codex' : a === 'cursor' ? 'Cursor' : a;
 const fmtDay = ts => { const k = mskDay(ts); return k.slice(8, 10) + '.' + k.slice(5, 7) + '.' + k.slice(0, 4); };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -141,7 +155,7 @@ const projName = name => {
    целиком, если последняя активность попала в окно (приближение, иначе они
    пропали бы совсем). */
 function compute() {
-  const { period, sessions: all, daily, dailyModels } = state;
+  const { period, sessions: all, daily, dailyModels, dailyTools } = state;
   const isSub = s => s.session_id.includes(':agent-');
   let maxTs = '';
   for (const s of all) if (s.last_ts > maxTs) maxTs = s.last_ts;
@@ -160,6 +174,7 @@ function compute() {
   const sess = [];  // сессии с активностью внутри окна
   let tAct = 0, tIn = 0, tOut = 0, tCache = 0, nSess = 0, nSub = 0;
   const byProj = {}, byAgent = {}, byType = {}, byModel = {}, byDayMap = {}, mtx = {}, outMap = {};
+  const byEffort = {}, byApproval = {};  // атрибуты сессии, не суммы: считаем сессии
   const subTok = {}; // токены субагентов, приплюсовываются к родительской сессии в таблице
   const winTok = {}; // вклад сессии в период — для таблицы «Последние сессии»
   for (const s of all) {
@@ -187,6 +202,12 @@ function compute() {
 
     const sub = isSub(s);
     const proj = s.project || 'Вне реестра';
+    // effort и режим одобрения — свойства сессии целиком, у субагента они
+    // унаследованы от родителя и удвоили бы картину
+    if (!sub) {
+      if (s.effort) byEffort[s.effort] = (byEffort[s.effort] || 0) + 1;
+      if (s.approval_mode) byApproval[s.approval_mode] = (byApproval[s.approval_mode] || 0) + 1;
+    }
     tIn += inTok; tOut += out; tCache += cache;
     if (!sub) { tAct += act; nSess++; } else {
       nSub++;
@@ -236,7 +257,20 @@ function compute() {
     if (!inWin(r.date) || r.model === '<synthetic>') continue;
     byModel[r.model] = (byModel[r.model] || 0) + (r.output_tokens || 0);
   }
-  return { sess, todayKey, cutKey, tAct, tIn, tOut, tCache, nSess, nSub, byProj, byAgent, byType, byModel, byDayMap, mtx, outMap, subTok, winTok, maxTs };
+  /* Чем занимались: вызовы инструментов по дням. Работа субагентов считается
+     (как и их токены) — делегированная правка остаётся правкой. */
+  const byCat = {}, byTool = {};
+  let tCalls = 0;
+  for (const r of dailyTools) {
+    if (!inWin(r.date)) continue;
+    const n = r.count || 0;
+    byCat[r.category] = (byCat[r.category] || 0) + n;
+    byTool[r.tool] = (byTool[r.tool] || 0) + n;
+    tCalls += n;
+  }
+  let tCompact = 0;  // метрика трения: сколько раз упёрлись в окно контекста
+  for (const r of daily) if (inWin(r.date)) tCompact += r.compactions || 0;
+  return { sess, todayKey, cutKey, tAct, tIn, tOut, tCache, nSess, nSub, byProj, byAgent, byType, byModel, byDayMap, mtx, outMap, subTok, winTok, maxTs, byCat, byTool, tCalls, tCompact, byEffort, byApproval };
 }
 
 /* Группировка дневных срезов: день / неделя (с понедельника) / месяц */
@@ -272,6 +306,18 @@ function render() {
     ['Токены out', fmtTok(c.tOut), 'сгенерировано агентами'],
     ['Cache read', fmtTok(c.tCache), 'учитывается отдельно'],
   ];
+  // Ledger до миграции активности — колонок нет, KPI не показываем
+  if (c.tCalls) kpis.push(['Вызовов инструментов', fmtN(c.tCalls), c.tCompact ? 'компактификаций: ' + c.tCompact : 'чем работали агенты']);
+
+  // чем занимались: категории сравнимы между агентами, сырые имена — нет
+  const catArr = Object.entries(c.byCat).sort((a, b) => b[1] - a[1]);
+  const catMax = Math.max(1, ...catArr.map(([, v]) => v));
+  const toolArr = Object.entries(c.byTool).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const EFFORT_RANK = ['xhigh', 'high', 'medium', 'low'];
+  const effArr = Object.entries(c.byEffort).sort((a, b) => EFFORT_RANK.indexOf(a[0]) - EFFORT_RANK.indexOf(b[0]));
+  const apprArr = Object.entries(c.byApproval).sort((a, b) => b[1] - a[1]);
+  // min-width:0 обязателен: без него длинное имя инструмента распирает flex-строку
+  const kRow = (name, right) => `<div class="krow"><div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(name)}</div><div class="r tnum">${right}</div></div>`;
 
   // chart: дни периода → корзины по выбранной группировке
   let firstKey = c.cutKey;
@@ -375,6 +421,39 @@ function render() {
         </div>
       </div>
     </section>
+    ${c.tCalls ? `<div class="hr"></div><section>
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-4);flex-wrap:wrap;">
+        <h2 class="sec">Чем занимались</h2>
+        <div class="tnum" style="font-size:13.5px;color:var(--color-neutral-600);">${fmtN(c.tCalls)} вызовов${c.tCompact ? ' · упирались в контекст ' + c.tCompact + ' раз' : ''}</div>
+      </div>
+      <p style="font-size:14.5px;color:var(--color-neutral-700);margin:var(--space-2) 0 var(--space-4);max-width:70ch;">Категории сравнимы между агентами: <span class="mono" style="font-size:13.5px;">Bash</span> у Claude Code и <span class="mono" style="font-size:13.5px;">exec</span> у Codex — одна «оболочка». Работа субагентов учитывается: делегированная правка остаётся правкой.</p>
+      <div class="cols">
+        <div>
+          ${catArr.map(([k, v]) => `
+            <div class="prow">
+              <div class="r1">
+                <div style="font-size:14.5px;">${esc(catName(k))}</div>
+                <div class="tnum" style="font-size:14px;color:var(--color-neutral-700);white-space:nowrap;">${fmtN(v)} · ${Math.round(v / c.tCalls * 100)}%</div>
+              </div>
+              <div class="track"><div class="fill" style="width:${Math.max(1, Math.round(v / catMax * 100))}%;"></div></div>
+            </div>`).join('')}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:var(--space-6);">
+          <div>
+            <h3 style="font-size:20px;font-weight:500;margin-bottom:var(--space-2);">Инструменты</h3>
+            ${toolArr.map(([n, v]) => kRow(toolLabel(n), fmtN(v))).join('')}
+          </div>
+          ${effArr.length ? `<div>
+            <h3 style="font-size:20px;font-weight:500;margin-bottom:var(--space-2);">Глубина рассуждений</h3>
+            ${effArr.map(([n, v]) => kRow(n, v + ' сес.')).join('')}
+          </div>` : ''}
+          ${apprArr.length ? `<div>
+            <h3 style="font-size:20px;font-weight:500;margin-bottom:var(--space-2);">Режим одобрения</h3>
+            ${apprArr.map(([n, v]) => kRow(n, v + ' сес.')).join('')}
+          </div>` : ''}
+        </div>
+      </div>
+    </section>` : ''}
     <div class="hr"></div>
     <section>
       <h2 class="sec" style="margin-bottom:var(--space-4);">Проект × агент</h2>

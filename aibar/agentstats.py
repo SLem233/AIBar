@@ -48,6 +48,34 @@ SELECT agent, session_id, date, model, output_tokens
 FROM daily_models
 """
 
+# Активность сессии (AgentPulse ≥ 29.07.2026): чем агент занимался, сколько раз
+# упирался в контекст, с каким effort и режимом одобрения. На ledger, собранном
+# до миграции, этих колонок нет — читаем их только если они реально есть.
+_SESSION_ACTIVITY_COLS = ("compactions", "tool_calls", "effort", "approval_mode")
+_DAILY_ACTIVITY_COLS = ("compactions", "tool_calls")
+
+_DAILY_TOOLS_SQL = """
+SELECT agent, session_id, date, tool, category, count
+FROM daily_tools
+"""
+
+
+def _existing_cols(con: sqlite3.Connection, table: str, wanted: tuple) -> list[str]:
+    """Те из `wanted`, что реально есть в таблице (старый ledger — без них)."""
+    try:
+        have = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+    except sqlite3.Error:
+        return []
+    return [c for c in wanted if c in have]
+
+
+def _with_cols(sql: str, cols: list[str]) -> str:
+    """Дописать колонки в SELECT перед FROM."""
+    if not cols:
+        return sql
+    head, sep, tail = sql.partition("FROM")
+    return f"{head.rstrip().rstrip(',')}, {', '.join(cols)}\n{sep}{tail}"
+
 # Отметки о проведённых ретроспективах: retro_done:<проект> -> last_ts на тот момент
 _RETRO_SQL = "SELECT key, value FROM meta WHERE key LIKE 'retro_done:%'"
 
@@ -164,12 +192,26 @@ def load_data(
     con = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
     try:
         con.row_factory = sqlite3.Row
-        sessions = [dict(r) for r in con.execute(_SESSIONS_SQL)]
-        daily = [dict(r) for r in con.execute(_DAILY_SQL)]
+        sessions = [
+            dict(r)
+            for r in con.execute(
+                _with_cols(_SESSIONS_SQL, _existing_cols(con, "sessions", _SESSION_ACTIVITY_COLS))
+            )
+        ]
+        daily = [
+            dict(r)
+            for r in con.execute(
+                _with_cols(_DAILY_SQL, _existing_cols(con, "daily_activity", _DAILY_ACTIVITY_COLS))
+            )
+        ]
         try:
             daily_models = [dict(r) for r in con.execute(_DAILY_MODELS_SQL)]
         except sqlite3.Error:
             daily_models = []  # ledger старой версии — модели возьмём из сессий
+        try:
+            daily_tools = [dict(r) for r in con.execute(_DAILY_TOOLS_SQL)]
+        except sqlite3.Error:
+            daily_tools = []  # ledger до миграции активности
         try:
             marks = {
                 r["key"].split(":", 1)[1]: r["value"] for r in con.execute(_RETRO_SQL)
@@ -183,6 +225,7 @@ def load_data(
         "sessions": sessions,
         "daily": daily,
         "daily_models": daily_models,
+        "daily_tools": daily_tools,
         "retro": _retro_pending(sessions, marks),
         "cards": _card_links(projects, Path(cards_dir) if cards_dir else None),
         # Сессии «вне реестра» старше этой отметки помечены как «не для

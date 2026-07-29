@@ -23,7 +23,7 @@ globalThis.document = {
 };
 
 const bundle = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'aibar-probe-')), 'page.cjs');
-fs.writeFileSync(bundle, script + '\nmodule.exports = { compute, state };\n', 'utf8');
+fs.writeFileSync(bundle, script + '\nmodule.exports = { compute, state, toolLabel };\n', 'utf8');
 const api = require(bundle);
 
 api.state.period = Number(periodArg);
@@ -36,4 +36,12 @@ console.log(JSON.stringify({
   mtx: c.mtx, subTok: c.subTok, outMap: c.outMap, byDayMap: c.byDayMap,
   sessIds: c.sess.map(s => s.session_id),
   cutKey: c.cutKey, todayKey: c.todayKey,
+  byCat: c.byCat, byTool: c.byTool, tCalls: c.tCalls,
+  tCompact: c.tCompact, byEffort: c.byEffort, byApproval: c.byApproval,
+  toolLabels: [
+    api.toolLabel('mcp__chrome-devtools__get_network_request'),
+    api.toolLabel('mcp__claude_ai_Gmail__search_threads'),
+    api.toolLabel('Bash'),
+    api.toolLabel('mcp__weird'),
+  ],
 }));
