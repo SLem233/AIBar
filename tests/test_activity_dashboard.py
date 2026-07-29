@@ -272,6 +272,26 @@ class TestPageAggregation:
         assert c["actProject"] == ""
         assert c["tCalls"] == 19
 
+    def test_meter_scales_differ_by_block(self, page):
+        """Две шкалы полосы намеренно разные — это смысл, а не оформление.
+
+        Где напечатан процент (категории), полоса = доля от общего, иначе лидер
+        рисовался бы во всю ширину рядом с надписью «41%». Где напечатаны часы и
+        токены (проекты), полоса = доля от лидера, иначе полтора десятка проектов
+        дают сплошные штрихи.
+        """
+        m = self.compute(page, 0)["meters"]
+        assert round(m["shareTop"]) == 41       # 3340 из 8157
+        assert round(m["shareTail"], 1) == 0.7  # хвост остаётся хвостом
+        assert m["relTop"] == 100               # лидер занимает строку целиком
+        assert round(m["relTail"], 1) == 1.8
+
+    def test_meter_survives_empty_data(self, page):
+        """Пустой период не должен давать деление на ноль и полосу-призрак."""
+        m = self.compute(page, 0)["meters"]
+        assert m["shareZeroTotal"] == 0
+        assert m["relZeroMax"] == 0
+
     def test_mcp_tool_names_are_shortened(self, page):
         """`mcp__сервер__инструмент` — 40+ символов, в узкой колонке нечитаемо."""
         got = self.compute(page, 0)["toolLabels"]

@@ -47,30 +47,67 @@
   select#actProj { padding: 4px 8px; font-family: var(--font-body); font-size: 13px; cursor: pointer; color: var(--color-neutral-700); background: transparent; border: 1px solid var(--color-divider); border-radius: var(--radius-sm); max-width: 40ch; }
   select#actProj:hover { color: var(--color-accent-600); border-color: var(--color-accent-300); }
   header.top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-6); border-bottom: 1px solid var(--color-text); padding-bottom: var(--space-4); flex-wrap: wrap; }
-  .kpis { display: grid; grid-template-columns: repeat(5, 1fr); margin-top: var(--space-6); }
-  .kpi { padding: 0 20px; }
+  /* Число плиток менялось (5 → 6) и ещё будет меняться — flex вместо жёсткой
+     сетки колонок, иначе лишняя плитка уезжает на второй ряд. Кегль значения
+     считается от ширины плитки, чтобы «2,30 млрд» не вылезало за разделитель.
+     Подпись резервирует две строки: значения стоят на одной линии даже там,
+     где подпись переносится. */
+  .kpis { display: flex; margin-top: var(--space-6); }
+  .kpi { flex: 1 1 0; min-width: 0; padding: 0 16px; container-type: inline-size; }
   .kpi + .kpi { border-left: 1px solid var(--color-divider); }
   .kpi:first-child { padding-left: 0; }
-  .kpi .lbl { font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-neutral-600); }
-  .kpi .val { font-family: var(--font-heading); font-size: 46px; line-height: 1.15; margin-top: 6px; }
-  .kpi .meta { font-size: 13.5px; color: var(--color-neutral-600); margin-top: 2px; }
-  h2.sec { font-size: 26px; font-weight: 500; }
+  .kpi:last-child { padding-right: 0; }
+  .kpi .lbl { font-size: 11.5px; line-height: 1.3; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-neutral-600); min-height: 2.6em; }
+  .kpi .val { font-family: var(--font-heading); font-size: 38px; line-height: 1.12; margin-top: 4px; white-space: nowrap; }
+  @supports (font-size: 1cqi) { .kpi .val { font-size: clamp(27px, 23cqi, 46px); } }
+  .kpi .meta { font-size: 13px; line-height: 1.4; color: var(--color-neutral-600); margin-top: 3px; }
+  /* Иерархия — начертанием, не цветом: цвет текста и так самый тёмный в палитре.
+     Cormorant подключён только в 400 и 600, поэтому вес 500 браузер рисовал
+     лицом 400 — тонко и выцветше. Секции — 600; мелкие рубрики переведены на
+     Lora в разрядку: на 20px тонкий Cormorant всё равно читался бы светлее. */
+  h2.sec { font-size: 27px; font-weight: 600; letter-spacing: 0.01em; }
+  h3.sub {
+    font-family: var(--font-body); font-size: 12.5px; font-weight: 600;
+    line-height: 1.3; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--color-neutral-600);
+    margin: 0; padding-bottom: 7px; border-bottom: 1px solid var(--color-text);
+  }
   .chart { display: flex; align-items: flex-end; gap: 3px; height: 150px; margin-top: 20px; border-bottom: 1px solid var(--color-divider); padding-bottom: 1px; }
   .bar { flex: 1; min-width: 0; background: var(--color-accent-200); border-top: 2px solid var(--color-accent); border-radius: 1px 1px 0 0; }
   .xlabels { display: flex; gap: 3px; margin-top: 6px; overflow: hidden; }
   .xlabels div { flex: 1; min-width: 0; font-size: 12px; color: var(--color-neutral-600); text-align: center; white-space: nowrap; }
   .cols { display: grid; grid-template-columns: 1.25fr 1fr; gap: 44px; }
-  .prow { padding: 10px 0; border-bottom: 1px solid var(--color-divider); }
-  .prow .r1 { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-4); }
-  .prow .track { height: 7px; margin-top: 7px; background: var(--color-neutral-100); border-radius: 2px; }
-  .prow .fill { height: 7px; background: var(--color-accent-300); border-right: 2px solid var(--color-accent); border-radius: 2px; }
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 44px; align-items: start; }
+  /* Единая строка списка на всю страницу. Полоса — не отдельный элемент под
+     текстом (он ломал общую сетку строк), а окрашенный отрезок нижней линейки:
+     строка со шкалой и строка без неё одной высоты. */
+  .row {
+    position: relative; display: flex; align-items: baseline; justify-content: space-between;
+    gap: var(--space-4); padding: 6px 0;
+    border-bottom: 1px solid var(--color-divider); font-size: 14.5px;
+  }
+  .row > .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row > .v { color: var(--color-neutral-700); white-space: nowrap; font-size: 14px; }
+  .row > .meter { position: absolute; left: 0; bottom: -1px; height: 2px; min-width: 3px; background: var(--color-accent); }
+  /* мелкие срезы сессий (0–4 значения) — строкой пар, а не лоскутными списками */
+  .attrs { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--space-4) 44px; margin-top: var(--space-8); }
+  .attr .vals { display: flex; flex-wrap: wrap; gap: 4px 22px; margin-top: 8px; font-size: 14.5px; }
+  .attr .vals span { white-space: nowrap; }
+  .attr .vals em { font-style: normal; font-size: 13.5px; color: var(--color-neutral-700); }
   .agentcards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-4); }
   .agentcards .card { padding: var(--space-4); }
   .agentcards .k { font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-accent-700); }
   .agentcards .v { font-family: var(--font-heading); font-size: 32px; margin-top: 4px; }
   .agentcards .m { font-size: 13.5px; color: var(--color-neutral-700); margin-top: 4px; line-height: 1.6; }
   .krow { display: flex; justify-content: space-between; gap: var(--space-4); padding: 6px 0; border-bottom: 1px solid var(--color-divider); font-size: 14.5px; }
+  .krow > div:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .krow .r { color: var(--color-neutral-700); white-space: nowrap; }
+  @media (max-width: 980px) {
+    .kpis { flex-wrap: wrap; }
+    .kpi { flex: 1 1 30%; padding: var(--space-3) 16px; }
+    .kpi:first-child { padding-left: 0; }
+    .duo { grid-template-columns: 1fr; gap: var(--space-8); }
+  }
   table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
   table.table th { text-align: left; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 86%, transparent); padding: var(--space-2); border-bottom: 1px solid var(--color-divider); }
   table.table td { padding: var(--space-2); border-bottom: 1px solid var(--color-divider); }
@@ -135,6 +172,13 @@ function fmtTok(n) {
 /* Вызовы инструментов — счётные величины, а не объёмы: «14 тыс» здесь врёт,
    нужно точное число с разрядами. */
 const fmtN = n => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+/* Длина полосы в строке. Две шкалы намеренно разные:
+   sharePct — где рядом напечатан процент (категории работы): полоса обязана
+     совпадать с числом, иначе «41%» во всю ширину сбивает с толку;
+   relPct — где напечатаны часы и токены (проекты): доля от общего дала бы у
+     полутора десятков проектов сплошные штрихи, лидер должен занимать строку. */
+const sharePct = (v, total) => total > 0 ? v / total * 100 : 0;
+const relPct = (v, max) => max > 0 ? v / max * 100 : 0;
 const agentName = a => a === 'claude-code' ? 'Claude Code' : a === 'codex' ? 'Codex' : a === 'cursor' ? 'Cursor' : a;
 const fmtDay = ts => { const k = mskDay(ts); return k.slice(8, 10) + '.' + k.slice(5, 7) + '.' + k.slice(0, 4); };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -332,13 +376,11 @@ function render() {
 
   // чем занимались: категории сравнимы между агентами, сырые имена — нет
   const catArr = Object.entries(c.byCat).sort((a, b) => b[1] - a[1]);
-  const catMax = Math.max(1, ...catArr.map(([, v]) => v));
   const toolArr = Object.entries(c.byTool).sort((a, b) => b[1] - a[1]).slice(0, 8);
   const EFFORT_RANK = ['xhigh', 'high', 'medium', 'low'];
   const effArr = Object.entries(c.byEffort).sort((a, b) => EFFORT_RANK.indexOf(a[0]) - EFFORT_RANK.indexOf(b[0]));
   const apprArr = Object.entries(c.byApproval).sort((a, b) => b[1] - a[1]);
   // min-width:0 обязателен: без него длинное имя инструмента распирает flex-строку
-  const kRow = (name, right) => `<div class="krow"><div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(name)}</div><div class="r tnum">${right}</div></div>`;
 
   // chart: дни периода → корзины по выбранной группировке
   let firstKey = c.cutKey;
@@ -417,12 +459,10 @@ function render() {
           </div>
         </div>
         ${projArr.map(([name, v]) => `
-          <div class="prow">
-            <div class="r1">
-              <div style="font-size:14.5px;${name === 'Вне реестра' ? 'color:var(--color-neutral-600);font-style:italic;' : ''}">${projName(name)}</div>
-              <div class="tnum" style="font-size:14px;color:var(--color-neutral-700);white-space:nowrap;">${fmtH(v.act)} · ${v.sess} сес. · ${fmtTok(v.out)} out</div>
-            </div>
-            <div class="track"><div class="fill" style="width:${Math.max(1, Math.round(sortVal(v) / barMax * 100))}%;"></div></div>
+          <div class="row">
+            <div class="n" style="${name === 'Вне реестра' ? 'color:var(--color-neutral-600);font-style:italic;' : ''}">${projName(name)}</div>
+            <div class="v tnum">${fmtH(v.act)} · ${v.sess} сес. · ${fmtTok(v.out)} out</div>
+            ${sortVal(v) > 0 ? `<div class="meter" style="width:${relPct(sortVal(v), barMax).toFixed(1)}%;"></div>` : ''}
           </div>`).join('')}
       </div>
       <div style="display:flex;flex-direction:column;gap:var(--space-6);">
@@ -433,11 +473,11 @@ function render() {
           </div>
         </div>
         <div>
-          <h3 style="font-size:20px;font-weight:500;margin-bottom:var(--space-2);">Типы задач</h3>
+          <h3 class="sub" style="margin-bottom:var(--space-2);">Типы задач</h3>
           ${types.map(([n, v]) => `<div class="krow"><div>${esc(n)}</div><div class="r tnum">${fmtH(v.act)} · ${v.sess} сес.</div></div>`).join('')}
         </div>
         <div>
-          <h3 style="font-size:20px;font-weight:500;margin-bottom:var(--space-2);">Модели</h3>
+          <h3 class="sub" style="margin-bottom:var(--space-2);">Модели</h3>
           ${models.map(([n, v]) => `<div class="krow"><div>${esc(n)}</div><div class="r tnum">${fmtTok(v)} out</div></div>`).join('')}
         </div>
       </div>
@@ -454,32 +494,32 @@ function render() {
         </div>
       </div>
       <p style="font-size:14.5px;color:var(--color-neutral-700);margin:var(--space-2) 0 var(--space-4);max-width:70ch;">Категории сравнимы между агентами: <span class="mono" style="font-size:13.5px;">Bash</span> у Claude Code и <span class="mono" style="font-size:13.5px;">exec</span> у Codex — одна «оболочка». Работа субагентов учитывается: делегированная правка остаётся правкой.</p>
-      <div class="cols">
+      <div class="duo">
         <div>
+          <h3 class="sub">Категории работы</h3>
           ${catArr.map(([k, v]) => `
-            <div class="prow">
-              <div class="r1">
-                <div style="font-size:14.5px;">${esc(catName(k))}</div>
-                <div class="tnum" style="font-size:14px;color:var(--color-neutral-700);white-space:nowrap;">${fmtN(v)} · ${Math.round(v / c.tCalls * 100)}%</div>
-              </div>
-              <div class="track"><div class="fill" style="width:${Math.max(1, Math.round(v / catMax * 100))}%;"></div></div>
+            <div class="row">
+              <div class="n">${esc(catName(k))}</div>
+              <div class="v tnum">${fmtN(v)} · ${Math.round(sharePct(v, c.tCalls))}%</div>
+              ${v > 0 ? `<div class="meter" style="width:${sharePct(v, c.tCalls).toFixed(1)}%;"></div>` : ''}
             </div>`).join('')}
         </div>
-        <div style="display:flex;flex-direction:column;gap:var(--space-6);">
-          <div>
-            <h3 style="font-size:20px;font-weight:500;margin-bottom:var(--space-2);">Инструменты</h3>
-            ${toolArr.map(([n, v]) => kRow(toolLabel(n), fmtN(v))).join('')}
-          </div>
-          ${effArr.length ? `<div>
-            <h3 style="font-size:20px;font-weight:500;margin-bottom:var(--space-2);">Глубина рассуждений</h3>
-            ${effArr.map(([n, v]) => kRow(n, v + ' сес.')).join('')}
-          </div>` : ''}
-          ${apprArr.length ? `<div>
-            <h3 style="font-size:20px;font-weight:500;margin-bottom:var(--space-2);">Режим одобрения</h3>
-            ${apprArr.map(([n, v]) => kRow(n, v + ' сес.')).join('')}
-          </div>` : ''}
+        <div>
+          <h3 class="sub">Инструменты</h3>
+          ${toolArr.map(([n, v]) => `
+            <div class="row"><div class="n">${esc(toolLabel(n))}</div><div class="v tnum">${fmtN(v)}</div></div>`).join('')}
         </div>
       </div>
+      ${effArr.length || apprArr.length ? `<div class="attrs">
+        ${effArr.length ? `<div class="attr">
+          <h3 class="sub">Глубина рассуждений</h3>
+          <div class="vals tnum">${effArr.map(([n, v]) => `<span>${esc(n)} <em>${v} сес.</em></span>`).join('')}</div>
+        </div>` : ''}
+        ${apprArr.length ? `<div class="attr">
+          <h3 class="sub">Режим одобрения</h3>
+          <div class="vals tnum">${apprArr.map(([n, v]) => `<span>${esc(n)} <em>${v} сес.</em></span>`).join('')}</div>
+        </div>` : ''}
+      </div>` : ''}
     </section>` : ''}
     <div class="hr"></div>
     <section>

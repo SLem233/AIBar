@@ -23,7 +23,7 @@ globalThis.document = {
 };
 
 const bundle = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'aibar-probe-')), 'page.cjs');
-fs.writeFileSync(bundle, script + '\nmodule.exports = { compute, state, toolLabel };\n', 'utf8');
+fs.writeFileSync(bundle, script + '\nmodule.exports = { compute, state, toolLabel, sharePct, relPct };\n', 'utf8');
 const api = require(bundle);
 
 api.state.period = Number(periodArg);
@@ -40,6 +40,12 @@ console.log(JSON.stringify({
   byCat: c.byCat, byTool: c.byTool, tCalls: c.tCalls,
   tCompact: c.tCompact, byEffort: c.byEffort, byApproval: c.byApproval,
   actProject: c.actProject, actProjects: c.actProjects,
+  meters: {
+    shareTop: api.sharePct(3340, 8157), shareTail: api.sharePct(59, 8157),
+    shareZeroTotal: api.sharePct(5, 0),
+    relTop: api.relPct(3340, 3340), relTail: api.relPct(59, 3340),
+    relZeroMax: api.relPct(5, 0),
+  },
   toolLabels: [
     api.toolLabel('mcp__chrome-devtools__get_network_request'),
     api.toolLabel('mcp__claude_ai_Gmail__search_threads'),
