@@ -177,6 +177,17 @@ class AIBarApp:
         menu.addAction(refresh_action)
         menu.addAction(self.widget_action)
         menu.addAction(self.hide_idle_action)
+        # Scale submenu (mirrors the widget's context-menu slider).
+        scale_menu = menu.addMenu("Масштаб")
+        scale_group = QActionGroup(scale_menu)
+        current_scale = int(round(float(self.cfg.get("widget_scale", 1.0)) * 100))
+        for pct in range(75, 151, 5):
+            sa = QAction(f"{pct}%", scale_menu, checkable=True)
+            sa.setChecked(pct == current_scale)
+            sa.triggered.connect(lambda _=False, p=pct: self.set_widget_scale(p / 100.0))
+            scale_group.addAction(sa)
+            scale_menu.addAction(sa)
+        menu.addAction(scale_menu.menuAction())
         menu.addAction(settings_action)
         menu.addAction(help_action)
 

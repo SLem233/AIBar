@@ -19,8 +19,17 @@ Behaviour (v0.6.0):
 import time
 from datetime import datetime, timezone
 
-from PySide6.QtCore import QPoint, QRect, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QPainter
+from PySide6.QtCore import (
+    QEasingCurve,
+    QPoint,
+    QPropertyAnimation,
+    QRect,
+    Qt,
+    QTimer,
+    QUrl,
+    Signal,
+)
+from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QPainter
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -47,13 +56,46 @@ EDGE_THRESHOLD = 0  # touching counts as docked
 # Fraction of the frame left poking out when auto-hidden (Feature 3).
 HIDE_VISIBLE_FRACTION = 0.15
 # Auto-hide delay (ms) after the mouse leaves the widget.
-HIDE_DELAY = 5000
+HIDE_DELAY = 0  # immediate: hide as soon as the cursor leaves
+# Auto-hide slide animation duration (ms): smooth slide behind the screen edge
+# over ~1 second, leaving ~15% of the frame visible.
+HIDE_ANIM_MS = 1000
 # A mouse move shorter than this (px) is treated as a click, not a drag.
 CLICK_THRESHOLD = 4
 
 DEFAULT_SCALE = 1.0
-MIN_SCALE = 0.5
+MIN_SCALE = 0.75
 MAX_SCALE = 1.5
+
+
+def _widget_countdown(windows, now=None) -> str:
+    """Two-unit countdown to the soonest window reset, shown on a tile.
+
+    Same logic as the dashboard's ``↺`` countdown, but formatted as a bare
+    two-unit value (no ``↺`` prefix): ``"1ч 22м"`` for short windows (e.g. the
+    5-hour session) and ``"2д 5ч"`` for long ones (e.g. Codex's weekly window).
+    Empty when no window has a reset time.
+    """
+    now = now if now is not None else datetime.now(timezone.utc)
+    soonest = min(
+        (w for w in windows if w.resets_at),
+        key=lambda w: w.resets_at,
+        default=None,
+    )
+    if soonest is None:
+        return ""
+    delta = soonest.resets_at - now
+    total = int(delta.total_seconds())
+    if total <= 0:
+        return "0м"
+    days, rem = divmod(total, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days:
+        return f"{days}д {hours}ч"
+    if hours:
+        return f"{hours}ч {minutes}м"
+    return f"{minutes}м"
 
 
 class UpdateBadge(QLabel):
@@ -132,21 +174,37 @@ class GaugeTile(QWidget):
         self.caption.setStyleSheet(
             f'color: {theme.TEXT_SECONDARY}; font-family: "{theme.FONT_FAMILY}"; font-size: 11px;'
         )
+        # Countdown to the next window reset, shown on its own line below the name.
+        self.countdown_label = QLabel("")
+        self.countdown_label.setAlignment(Qt.AlignHCenter)
+        self.countdown_label.setStyleSheet(
+            f'color: {theme.TEXT_MUTED}; font-family: "{theme.FONT_FAMILY}"; font-size: 10px;'
+        )
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
         layout.addWidget(self.gauge, stretch=1)
         layout.addWidget(self.caption)
+        layout.addWidget(self.countdown_label)
 
     def update_snapshot(self, snap: ProviderSnapshot) -> None:
         self.gauge.set_percents([w.used_percent for w in snap.windows])
         suffix = " ⏸" if snap.paused else (" ⚠" if snap.error else "")
         self.caption.setText(f"{snap.provider}{suffix}")
+        countdown = _widget_countdown(snap.windows)
+        self.countdown_label.setText(countdown)
+        self.countdown_label.setVisible(bool(countdown))
 
     def resizeEvent(self, event) -> None:
         # captions don't fit below ~60px — the tooltip still names the provider
-        self.caption.setVisible(self.width() >= 60)
-        self.setToolTip(self.caption.text() if self.width() < 60 else "")
+        narrow = self.width() < 60
+        self.caption.setVisible(not narrow)
+        if narrow:
+            self.countdown_label.hide()
+        else:
+            # keep the countdown's own visibility rule (only if there is one)
+            self.countdown_label.setVisible(bool(self.countdown_label.text()))
+        self.setToolTip(self.caption.text() if narrow else "")
         super().resizeEvent(event)
 
 
@@ -201,19 +259,11 @@ class DesktopWidget(QWidget):
         self.update_badge = UpdateBadge(self)
         self.vpn_badge = VpnBadge(self)
 
-        # The soonest-reset countdown label, shown on the widget itself.
-        self.countdown_label = QLabel("")
-        self.countdown_label.setAlignment(Qt.AlignCenter)
-        self.countdown_label.setStyleSheet(
-            f'color: {theme.TEXT_MUTED}; font-family: "{theme.FONT_FAMILY}"; font-size: 10px;'
-        )
-
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 2)
         layout.addWidget(self.update_badge)
         layout.addWidget(self.vpn_badge)
         layout.addLayout(self.tiles_vbox, stretch=1)  # vertical is active
-        layout.addWidget(self.countdown_label)
         layout.addWidget(grip, alignment=Qt.AlignBottom | Qt.AlignRight)
 
         # Auto-hide state.
@@ -225,6 +275,8 @@ class DesktopWidget(QWidget):
         self._idle_hide_timer.setSingleShot(True)
         self._idle_hide_timer.setInterval(HIDE_DELAY)
         self._idle_hide_timer.timeout.connect(self._slide_off)
+        # Smooth slide animation for hide/show (animates pos()).
+        self._slide_anim: QPropertyAnimation | None = None
 
         # Debounced geometry persistence.
         self._geometry_timer = QTimer(self)
@@ -262,26 +314,6 @@ class DesktopWidget(QWidget):
         self.vpn_badge.setVisible(any(s.paused for s in snapshots))
         self._record_activity(snapshots)
         self._apply_visibility()
-        self._update_countdown()
-
-    def _update_countdown(self) -> None:
-        """Show the soonest reset countdown among visible tiles' windows."""
-        now = datetime.now(timezone.utc)
-        soonest = None
-        soonest_dt = None
-        for name in self._visible_providers():
-            tile_snap = next((s for s in self._snapshots if s.provider == name), None)
-            if not tile_snap:
-                continue
-            for w in tile_snap.windows:
-                if w.resets_at and (soonest_dt is None or w.resets_at < soonest_dt):
-                    soonest_dt = w.resets_at
-                    soonest = w
-        if soonest is not None:
-            self.countdown_label.setText(f"↺ {soonest.reset_countdown(now)}")
-            self.countdown_label.show()
-        else:
-            self.countdown_label.hide()
 
     def _active_tiles_layout(self):
         return self.tiles_hbox if self._horizontal else self.tiles_vbox
@@ -409,6 +441,34 @@ class DesktopWidget(QWidget):
             self._idle_hide_timer.stop()
             self._slide_in()
 
+    def _animate_to(self, target: QPoint) -> None:
+        """Smoothly animate the window position to ``target`` over HIDE_ANIM_MS."""
+        if self._slide_anim is not None:
+            self._slide_anim.stop()
+        anim = QPropertyAnimation(self, b"pos", self)
+        anim.setDuration(HIDE_ANIM_MS)
+        anim.setStartValue(self.pos())
+        anim.setEndValue(target)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._slide_anim = anim
+        anim.start(QPropertyAnimation.DeleteWhenStopped)
+
+    def _hide_target(self, edge: str) -> QPoint:
+        """Position where the widget sits ~15% poking out behind ``edge``."""
+        visible = max(6, int(self._frame_extent(edge) * HIDE_VISIBLE_FRACTION))
+        offset = self._frame_extent(edge) - visible
+        screen = self._available_geometry()
+        x, y = self.pos().x(), self.pos().y()
+        if edge == "top":
+            y = screen.top() - offset
+        elif edge == "bottom":
+            y = screen.bottom() - visible + 1
+        elif edge == "left":
+            x = screen.left() - offset
+        else:  # right
+            x = screen.right() - visible + 1
+        return QPoint(x, y)
+
     def _slide_off(self) -> None:
         """Slide the widget behind the nearest screen edge, leaving ~15% as a tab."""
         if not self._hide_on_idle or self._hidden:
@@ -418,20 +478,10 @@ class DesktopWidget(QWidget):
             edge = self._nearest_edge_by_distance()
         if edge is None:
             return
-        # Flush to that edge first (the visible position), then slide mostly off.
+        # Flush to that edge first (the visible position), then animate off.
         self._dock_to_edge(edge)
         self._docked_pos = self.pos()
-        visible = max(6, int(self._frame_extent(edge) * HIDE_VISIBLE_FRACTION))
-        offset = self._frame_extent(edge) - visible
-        screen = self._available_geometry()
-        if edge == "top":
-            self.move(self.pos().x(), screen.top() - offset)
-        elif edge == "bottom":
-            self.move(self.pos().x(), screen.bottom() - visible + 1)
-        elif edge == "left":
-            self.move(screen.left() - offset, self.pos().y())
-        else:  # right
-            self.move(screen.right() - visible + 1, self.pos().y())
+        self._animate_to(self._hide_target(edge))
         self._hidden_anchor = edge
         self._hidden = True
 
@@ -456,21 +506,24 @@ class DesktopWidget(QWidget):
         if not self._hidden:
             return
         if self._docked_pos is not None:
-            self.move(self._clamp_to_screen(self._docked_pos))
+            target = self._clamp_to_screen(self._docked_pos)
         elif self._hidden_anchor:
             self._dock_to_edge(self._hidden_anchor)
+            target = self.pos()
+        else:
+            self._hidden = False
+            return
+        self._animate_to(target)
         self._hidden = False
 
     # ---- mini mode -------------------------------------------------------
     def set_mode(self, mode: str) -> None:
         self._mode = mode if mode in ("full", "mini") else "full"
         self._apply_visibility()
-        self._update_countdown()
 
     def set_mini_threshold(self, percent: float) -> None:
         self._mini_threshold = percent
         self._apply_visibility()
-        self._update_countdown()
 
     def _record_activity(self, snapshots: list[ProviderSnapshot], now: float | None = None) -> None:
         now = now if now is not None else time.time()

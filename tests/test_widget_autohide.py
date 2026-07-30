@@ -6,7 +6,7 @@ The widget does NOT change size or color — only its on-screen position.
 """
 
 import pytest
-from PySide6.QtCore import QRect
+from PySide6.QtCore import QAbstractAnimation, QRect
 from PySide6.QtWidgets import QApplication
 
 from aibar.providers.base import ProviderSnapshot, RateWindow
@@ -51,9 +51,13 @@ def test_slide_off_top_leaves_15pct_tab(app):
     widget._slide_off()
     assert widget._hidden is True
     assert widget._hidden_anchor == "top"
-    # only ~15% of the height (rounded, min 6px) pokes below the top edge
+    # The animation target leaves only ~15% of the height poking out.
     expected_visible = max(6, int(h * HIDE_VISIBLE_FRACTION))
-    assert widget.pos().y() == SCREEN.top() - (h - expected_visible)
+    target = widget._slide_anim.endValue()
+    assert target.y() == SCREEN.top() - (h - expected_visible)
+    # An animation was started (smooth slide, not instant teleport).
+    assert widget._slide_anim is not None
+    assert widget._slide_anim.state() == QAbstractAnimation.Running
 
 
 def test_slide_off_does_not_change_size(app):
@@ -75,7 +79,8 @@ def test_slide_off_left_edge(app):
     widget._slide_off()
     assert widget._hidden_anchor == "left"
     expected_visible = max(6, int(w * HIDE_VISIBLE_FRACTION))
-    assert widget.pos().x() == SCREEN.left() - (w - expected_visible)
+    target = widget._slide_anim.endValue()
+    assert target.x() == SCREEN.left() - (w - expected_visible)
 
 
 def test_slide_in_docks_flush_to_anchor_edge(app):
@@ -87,8 +92,10 @@ def test_slide_in_docks_flush_to_anchor_edge(app):
     assert widget._hidden is True
     widget._slide_in()
     assert widget._hidden is False
-    # docked flush against the top edge
-    assert widget.pos().y() == SCREEN.top()
+    # The slide-back target is flush against the top edge.
+    target = widget._slide_anim.endValue()
+    assert target.y() == SCREEN.top()
+
 
 
 def test_slide_off_noop_when_disabled(app):
