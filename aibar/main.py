@@ -6,7 +6,7 @@ Run: pythonw -m aibar.main
 import sys
 import threading
 
-from PySide6.QtCore import QObject, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QPoint, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QProgressDialog, QSystemTrayIcon
 
@@ -105,13 +105,18 @@ class AIBarApp:
         self.widget.set_mode(self.cfg.get("widget_mode", "full"))
         self.widget.hide_requested.connect(lambda: self.set_widget_enabled(False))
         self.widget.hide_on_idle_changed.connect(self.set_widget_hide_on_idle)
+        self.widget.scale_changed.connect(self.set_widget_scale)
         self.widget.check_updates_requested.connect(self.check_updates)
         self.widget.dashboard_requested.connect(self.show_dashboard_at_widget)
         self.widget.quit_requested.connect(app.quit)
         self.widget.geometry_changed.connect(self.save_widget_geometry)
+        # Apply scale before geometry so the stored size matches the scale.
+        self.widget._apply_scale(float(self.cfg.get("widget_scale", 1.0)))
         geometry = self.cfg.get("widget_geometry")
         if geometry and len(geometry) == 4:
-            self.widget.setGeometry(*geometry)
+            x, y, w, h = geometry
+            # Restore position; width/height are derived from scale/orientation.
+            self.widget.move(self.widget._clamp_to_screen(QPoint(x, y)))
         else:
             screen = app.primaryScreen().availableGeometry()
             self.widget.move(screen.right() - self.widget.width() - 16, screen.top() + 60)
@@ -240,6 +245,17 @@ class AIBarApp:
         if self.hide_idle_action.isChecked() != enabled:
             self.hide_idle_action.setChecked(enabled)
         self.widget.set_hide_on_idle(enabled)
+
+    def set_widget_scale(self, scale: float) -> None:
+        self.cfg["widget_scale"] = round(float(scale), 2)
+        config.save(self.cfg)
+        self.widget._apply_scale(scale)
+        self._apply_dashboard_scale(scale)
+
+    def _apply_dashboard_scale(self, scale: float) -> None:
+        """Scale the dashboard popup width by the same factor."""
+        base = 400
+        self.dashboard.setFixedWidth(max(240, int(base * scale)))
 
     def show_dashboard_at_widget(self) -> None:
         """Open the dashboard popup anchored next to the widget (left-click)."""
