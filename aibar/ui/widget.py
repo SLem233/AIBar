@@ -53,12 +53,18 @@ WIDGET_FLAGS = Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
 EDGE_THRESHOLD = 0  # touching counts as docked
 # Fraction of the frame left poking out when auto-hidden.
 HIDE_VISIBLE_FRACTION = 0.15
+# Extra margin (px) added around the visible "tab" so the cursor reliably
+# lands on it to trigger the slide-in. Frameless translucent windows don't get
+# enter events at the very screen edge, so the hit-test area must be generous.
+HIDE_TAB_HOVER_PAD = 40
 # Grace period (s) after the cursor leaves before hiding kicks in.
 HIDE_DELAY = 0.4
 # Auto-hide slide animation duration (ms).
 HIDE_ANIM_MS = 1000
 # How often the auto-hide poller checks the cursor position (ms).
 HIDE_POLL_MS = 350
+# Faster poll while hidden, so the slide-in reacts promptly to the cursor.
+HIDE_POLL_MS_FAST = 120
 # A mouse move shorter than this (px) is treated as a click, not a drag.
 CLICK_THRESHOLD = 4
 # Resize hit-test margin (px from each edge) and minimum frame size.
@@ -290,15 +296,52 @@ class DesktopWidget(QWidget):
         return QPoint(x, y)
 
     def _cursor_inside(self) -> bool:
-        """True if the mouse cursor is actually over the widget's frame.
+        """True if the mouse cursor is over the widget's hit area.
 
         Used to gate auto-hide: enter/leave events on a frameless translucent
         window are unreliable, so we check the real cursor position instead.
+
+        While hidden, the visible part is only the ~15% "tab" left poking out
+        at a screen edge; we expand the hit-test there (and a bit off the
+        screen edge) so the cursor reliably lands on it to trigger the
+        slide-in.
         """
+        if self._hidden and self._hidden_anchor:
+            return self._tab_hit_area().contains(QCursor.pos())
         geo = self.frameGeometry()
         if geo.isNull() or geo.width() <= 0 or geo.height() <= 0:
             return False
         return geo.contains(QCursor.pos())
+
+    def _tab_hit_area(self) -> QRect:
+        """Expanded rectangle covering the visible hidden tab + hover margin."""
+        geo = self.frameGeometry()
+        if geo.isNull():
+            return QRect()
+        edge = self._hidden_anchor
+        # Only the visible slice of the frame is on-screen; pad around it.
+        pad = HIDE_TAB_HOVER_PAD
+        if edge == "top":
+            # top slice visible; extend up off-screen a bit and around.
+            return QRect(
+                geo.left() - pad, geo.top() - pad,
+                geo.width() + 2 * pad, geo.height() + pad,
+            )
+        if edge == "bottom":
+            return QRect(
+                geo.left() - pad, geo.top(),
+                geo.width() + 2 * pad, geo.height() + pad,
+            )
+        if edge == "left":
+            return QRect(
+                geo.left() - pad, geo.top() - pad,
+                geo.width() + pad, geo.height() + 2 * pad,
+            )
+        # right
+        return QRect(
+            geo.left(), geo.top() - pad,
+            geo.width() + pad, geo.height() + 2 * pad,
+        )
 
     def _center(self) -> QPoint:
         g = self.geometry()
@@ -426,8 +469,18 @@ class DesktopWidget(QWidget):
         anim.setStartValue(self.pos())
         anim.setEndValue(target)
         anim.setEasingCurve(QEasingCurve.OutCubic)
+        # Clear our reference when the animation stops (finished OR stopped)
+        # so moveEvent resumes persistence and the next hide cycle can start a
+        # fresh animation. Relying on QPropertyAnimation.DeleteWhenStopped alone
+        # leaves a dangling Python reference to the deleted C++ object.
+        anim.stateChanged.connect(self._on_slide_state_changed)
         self._slide_anim = anim
         anim.start(QPropertyAnimation.DeleteWhenStopped)
+
+    def _on_slide_state_changed(self, new_state, _old_state) -> None:
+        from PySide6.QtCore import QAbstractAnimation
+        if new_state == QAbstractAnimation.Stopped:
+            self._slide_anim = None
 
     def _hide_target(self, edge: str) -> QPoint:
         """Position where the widget sits ~15% poking out behind ``edge``."""
@@ -483,6 +536,10 @@ class DesktopWidget(QWidget):
         else:
             if not self._hidden and (time.time() - self._last_active) >= HIDE_DELAY:
                 self._slide_off()
+        # React faster while hidden so the slide-in feels immediate on hover.
+        want = HIDE_POLL_MS_FAST if self._hidden else HIDE_POLL_MS
+        if self._idle_check_timer.interval() != want:
+            self._idle_check_timer.setInterval(want)
 
     def _nearest_edge_by_distance(self) -> str | None:
         """Closest screen edge by raw distance (for mid-screen auto-hide)."""
@@ -512,6 +569,9 @@ class DesktopWidget(QWidget):
         else:
             self._hidden = False
             return
+        # Reset the idle baseline so the poller doesn't immediately re-hide the
+        # widget while the slide-in animation is still running.
+        self._last_active = time.time()
         self._animate_to(target)
         self._hidden = False
 

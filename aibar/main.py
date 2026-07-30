@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QProgressDialog,
 
 from . import __version__, config, theme
 from .geoblock import GeoBlockGuard
-from .help import open_help
+from .help import bundled_icon_path, open_help
 from .polling import poll_all
 from .update import UpdateChecker
 from .updater import Updater
@@ -396,6 +396,11 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("AIBar")
+    # App icon: shows in the window title area, Alt-Tab and taskbar. The .exe
+    # already embeds the icon as a file resource; this sets it at the Qt level.
+    icon_path = bundled_icon_path()
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
     holder = AIBarApp(app)  # noqa: F841 — keep references alive
     run_event_loop = app.exec  # Qt event loop (name dodges an unrelated JS lint hook)
     return run_event_loop()

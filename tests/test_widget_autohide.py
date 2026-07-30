@@ -172,6 +172,45 @@ def test_idle_check_slides_in_when_cursor_returns(app):
     QCursor.setPos(0, 0)
 
 
+def test_tab_hit_area_around_top_edge(app):
+    """While hidden behind the top edge, the cursor just off the screen edge
+    (over the tab + hover pad) must count as 'inside' to trigger slide-in."""
+    widget = DesktopWidget()
+    _stub_screen(widget, SCREEN)
+    widget.move(100, 50)
+    widget.show()
+    widget._hide_on_idle = True
+    widget._slide_off()
+    assert widget._hidden_anchor == "top"
+    # Cursor slightly above the screen edge, aligned with the tab horizontally.
+    geo = widget.frameGeometry()
+    QCursor.setPos(geo.center().x(), SCREEN.top() - 5)
+    assert widget._cursor_inside() is True
+    # Cursor clearly far away -> not inside.
+    QCursor.setPos(geo.center().x(), SCREEN.top() - 200)
+    assert widget._cursor_inside() is False
+    QCursor.setPos(0, 0)
+
+
+def test_slide_anim_cleared_after_stop(app):
+    """_slide_anim must be None after the hide animation stops (finished or
+    interrupted), so a fresh hide cycle can start and moveEvent resumes
+    persistence. Relying on DeleteWhenStopped alone leaves a dangling ref."""
+    widget = DesktopWidget()
+    _stub_screen(widget, SCREEN)
+    widget.move(100, 50)
+    widget.show()
+    widget._hide_on_idle = True
+    widget._slide_off()
+    anim = widget._slide_anim
+    assert anim is not None
+    # Stopping (simulates natural finish or interruption) clears the ref via
+    # the stateChanged signal.
+    anim.stop()
+    app.processEvents()
+    assert widget._slide_anim is None
+
+
 def test_nearest_edge_by_distance_mid_screen(app):
     widget = DesktopWidget()
     _stub_screen(widget, SCREEN)

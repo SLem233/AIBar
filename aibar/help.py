@@ -16,6 +16,13 @@ def _bundled_help() -> Path:
     return Path(__file__).parent / "resources" / "help.html"
 
 
+def bundled_icon_path() -> Path:
+    """Path to the bundled app icon (works frozen and from source)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / "aibar" / "resources" / "aibar.ico"
+    return Path(__file__).parent / "resources" / "aibar.ico"
+
+
 def open_help() -> None:
     """Copy help.html to a stable location and open it in the browser.
 
