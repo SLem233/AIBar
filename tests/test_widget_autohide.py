@@ -32,14 +32,34 @@ def _stub_screen(widget, rect):
 SCREEN = QRect(0, 0, 1920, 1080)
 
 
-def test_hide_on_idle_setter_arms_timer(app):
+def test_hide_on_idle_setter_armed_when_cursor_off(app):
     widget = DesktopWidget()
+    _stub_screen(widget, SCREEN)
+    # Park the widget where the offscreen cursor (0,0) is clearly outside it.
+    widget.move(1000, 1000)
+    widget.show()
     assert widget._hide_on_idle is False
     widget.set_hide_on_idle(True)
     assert widget._hide_on_idle is True
-    assert widget._idle_hide_timer.isActive()
+    assert widget._idle_hide_timer.isActive()  # cursor off -> armed
     widget.set_hide_on_idle(False)
     assert not widget._idle_hide_timer.isActive()
+
+
+def test_slide_off_refuses_while_cursor_inside(app):
+    """Hide must not fire while the cursor is genuinely over the widget."""
+    from PySide6.QtGui import QCursor
+    widget = DesktopWidget()
+    _stub_screen(widget, SCREEN)
+    widget.move(100, 100)
+    widget.show()
+    # Put the cursor in the middle of the widget.
+    QCursor.setPos(160, 230)
+    widget._hide_on_idle = True
+    widget._slide_off()
+    assert widget._hidden is False  # refused because cursor is inside
+    # Restore the cursor so it doesn't leak into subsequent tests.
+    QCursor.setPos(0, 0)
 
 
 def test_slide_off_top_leaves_15pct_tab(app):

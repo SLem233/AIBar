@@ -120,6 +120,9 @@ class AIBarApp:
         else:
             screen = app.primaryScreen().availableGeometry()
             self.widget.move(screen.right() - self.widget.width() - 16, screen.top() + 60)
+        # Make sure we never start stuck partially off-screen (stale geometry
+        # from a previous run). The hide-on-idle flag is applied after this.
+        self.widget.ensure_visible()
         self.widget.set_hide_on_idle(bool(self.cfg.get("widget_hide_on_idle", False)))
         if self.cfg.get("widget_enabled", True):
             self.widget.show()

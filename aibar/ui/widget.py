@@ -55,8 +55,10 @@ WIDGET_FLAGS = Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
 EDGE_THRESHOLD = 0  # touching counts as docked
 # Fraction of the frame left poking out when auto-hidden (Feature 3).
 HIDE_VISIBLE_FRACTION = 0.15
-# Auto-hide delay (ms) after the mouse leaves the widget.
-HIDE_DELAY = 0  # immediate: hide as soon as the cursor leaves
+# Auto-hide delay (ms) after the cursor truly leaves the widget. Kept small so
+# hiding feels immediate, but non-zero to debounce spurious leaveEvent bursts
+# (frameless translucent windows get enter/leave flurries on tooltip overlap).
+HIDE_DELAY = 300
 # Auto-hide slide animation duration (ms): smooth slide behind the screen edge
 # over ~1 second, leaving ~15% of the frame visible.
 HIDE_ANIM_MS = 1000
@@ -297,6 +299,17 @@ class DesktopWidget(QWidget):
         y = min(max(pos.y(), screen.top()), screen.bottom() - self.height() + 1)
         return QPoint(x, y)
 
+    def _cursor_inside(self) -> bool:
+        """True if the mouse cursor is actually over the widget's frame.
+
+        Used to gate auto-hide: enter/leave events on a frameless translucent
+        window are unreliable, so we check the real cursor position instead.
+        """
+        geo = self.frameGeometry()
+        if geo.isNull() or geo.width() <= 0 or geo.height() <= 0:
+            return False
+        return geo.contains(QCursor.pos())
+
     def _center(self) -> QPoint:
         g = self.geometry()
         return QPoint(g.left() + g.width() // 2, g.top() + g.height() // 2)
@@ -435,16 +448,24 @@ class DesktopWidget(QWidget):
     # ---- auto-hide (Feature 3) -----------------------------------------
     def set_hide_on_idle(self, enabled: bool) -> None:
         self._hide_on_idle = bool(enabled)
+        self._idle_hide_timer.stop()
         if self._hide_on_idle:
-            self._idle_hide_timer.start()
+            # Arm the timer only if the cursor is actually off the widget;
+            # otherwise wait for a real leave before hiding.
+            if not self._cursor_inside():
+                self._idle_hide_timer.start()
         else:
-            self._idle_hide_timer.stop()
+            # Option off: the widget MUST be fully visible again.
             self._slide_in()
+
+    def _stop_slide_anim(self) -> None:
+        if self._slide_anim is not None:
+            self._slide_anim.stop()
+            self._slide_anim = None
 
     def _animate_to(self, target: QPoint) -> None:
         """Smoothly animate the window position to ``target`` over HIDE_ANIM_MS."""
-        if self._slide_anim is not None:
-            self._slide_anim.stop()
+        self._stop_slide_anim()
         anim = QPropertyAnimation(self, b"pos", self)
         anim.setDuration(HIDE_ANIM_MS)
         anim.setStartValue(self.pos())
@@ -473,17 +494,24 @@ class DesktopWidget(QWidget):
         """Slide the widget behind the nearest screen edge, leaving ~15% as a tab."""
         if not self._hide_on_idle or self._hidden:
             return
+        # Don't hide while the cursor is genuinely over the widget (guard
+        # against spurious leaveEvent bursts from the translucent window).
+        if self._cursor_inside():
+            self._idle_hide_timer.start()  # re-check shortly
+            return
         edge = self._nearest_docked_edge()
         if edge is None:
             edge = self._nearest_edge_by_distance()
         if edge is None:
             return
         # Flush to that edge first (the visible position), then animate off.
+        # Mark hidden BEFORE animating so moveEvent won't persist the off-screen
+        # frames; the docked (visible) position is what we restore later.
         self._dock_to_edge(edge)
         self._docked_pos = self.pos()
-        self._animate_to(self._hide_target(edge))
         self._hidden_anchor = edge
         self._hidden = True
+        self._animate_to(self._hide_target(edge))
 
     def _nearest_edge_by_distance(self) -> str | None:
         """Closest screen edge by raw distance (for mid-screen auto-hide)."""
@@ -515,6 +543,17 @@ class DesktopWidget(QWidget):
             return
         self._animate_to(target)
         self._hidden = False
+
+    def ensure_visible(self) -> None:
+        """Force the widget fully on-screen and not hidden (call at startup).
+
+        Guards against a stale partially-hidden geometry left from a prior run.
+        """
+        self._stop_slide_anim()
+        self._hidden = False
+        self._hidden_anchor = None
+        # If the stored position is off-screen, pull it back inside.
+        self.move(self._clamp_to_screen(self.pos()))
 
     # ---- mini mode -------------------------------------------------------
     def set_mode(self, mode: str) -> None:
@@ -588,12 +627,18 @@ class DesktopWidget(QWidget):
             )
             self._press_pos = event.globalPosition().toPoint()
             self._dragging = False
+            # A click means the user wants to interact: stop any hide/show
+            # animation so the drag isn't fought by the animator.
+            self._stop_slide_anim()
+            self._idle_hide_timer.stop()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
         if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
+            # While dragging the widget is fully visible (no slide animation).
             if self._hidden:
-                self._slide_in()
+                self._hidden = False
+                self._hidden_anchor = None
             target = event.globalPosition().toPoint() - self._drag_offset
             # Clamp: the widget can't leave the screen.
             clamped = self._clamp_to_screen(target)
@@ -619,6 +664,10 @@ class DesktopWidget(QWidget):
             if not self._dragging and moved < CLICK_THRESHOLD:
                 self.dashboard_requested.emit()
             self._dragging = False
+            # After a drag/click, re-arm auto-hide if enabled and the cursor is
+            # no longer over the widget.
+            if self._hide_on_idle and not self._cursor_inside():
+                self._idle_hide_timer.start()
         super().mouseReleaseEvent(event)
 
     def contextMenuEvent(self, event) -> None:
@@ -706,7 +755,9 @@ class DesktopWidget(QWidget):
 
     # ---- geometry persistence -------------------------------------------
     def moveEvent(self, event) -> None:
-        if not self._hidden:
+        # Don't persist positions while hidden or while a slide animation is
+        # running (those are transient off-screen frames).
+        if not self._hidden and self._slide_anim is None:
             self._geometry_timer.start()
         super().moveEvent(event)
 
