@@ -26,6 +26,9 @@ def snap(name="Claude"):
 
 def _stub_screen(widget, rect):
     class FakeScreen:
+        def geometry(self):
+            return rect
+
         def availableGeometry(self):
             return rect
     widget.screen = lambda: FakeScreen()

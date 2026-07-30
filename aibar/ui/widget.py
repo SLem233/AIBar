@@ -289,7 +289,10 @@ class DesktopWidget(QWidget):
 
     # ---- helpers --------------------------------------------------------
     def _available_geometry(self) -> QRect:
-        return self.screen().availableGeometry()
+        # Use the FULL screen geometry (not availableGeometry, which excludes
+        # the taskbar): the widget is allowed to sit flush against the bottom
+        # screen edge, underneath the taskbar area.
+        return self.screen().geometry()
 
     def _clamp_to_screen(self, pos: QPoint) -> QPoint:
         """Keep the whole frame inside the screen."""
