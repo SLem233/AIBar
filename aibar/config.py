@@ -11,6 +11,7 @@ DEFAULTS = {
     "refresh_seconds": 300,
     "providers": ["Claude", "Codex"],
     "widget_enabled": True,
+    "widget_hide_on_idle": False,  # auto-slide the widget off-screen after 5s idle
     "widget_geometry": None,  # [x, y, w, h]
     "widget_mode": "full",  # full | mini (mini: only providers near the limit)
     "mini_threshold": 70,  # percent that qualifies a provider for mini mode

@@ -1,7 +1,9 @@
-"""Always-on-top desktop widget: a column of per-provider radial gauges.
+"""Always-on-top desktop widget: a row or column of per-provider radial gauges.
 
-Draggable anywhere, resizable via the bottom-right grip; hovering shows a
-panel with the full per-provider breakdown next to the widget.
+Draggable anywhere, resizable via the bottom-right grip. Orientation is
+derived from the nearest screen edge after a drag (vertical at the left/right
+edge, horizontal at the top/bottom edge). Left-click opens the full
+dashboard popup; right-click opens the settings menu.
 """
 
 import time
@@ -27,6 +29,16 @@ from .dashboard import ProviderCard
 from .gauge import RadialGauge
 
 WIDGET_FLAGS = Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
+
+# Orientation: distance (px) from a screen edge at which the widget is
+# considered "docked" to that edge.
+EDGE_THRESHOLD = 12
+# Auto-hide: visible sliver (px) left poking out when the widget slides off.
+HIDE_SLIVER = 10
+# Auto-hide delay (ms) after the mouse leaves the widget.
+HIDE_DELAY = 5000
+# A mouse move shorter than this (px) is treated as a click, not a drag.
+CLICK_THRESHOLD = 4
 
 
 class UpdateBadge(QLabel):
@@ -94,100 +106,6 @@ class VpnBadge(QLabel):
         self.hide()
 
 
-class HoverPanel(QWidget):
-    """Extended info shown while the mouse is over the widget (or the panel)."""
-
-    hover_changed = Signal(bool)
-    refresh_requested = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowFlags(WIDGET_FLAGS)
-        self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedWidth(400)
-        self.setStyleSheet(
-            f"""
-            QLabel {{ color: {theme.TEXT_SECONDARY}; font-family: "{theme.FONT_FAMILY}"; }}
-            #card {{
-                background: {theme.SURFACE};
-                border: 1px solid {theme.BORDER};
-                border-radius: 10px;
-            }}
-            #cardTitle {{ color: {theme.TEXT_PRIMARY}; font-size: 15px; font-weight: 600; }}
-            #cardPlan {{ color: {theme.TEXT_MUTED}; font-size: 12px; }}
-            #header {{ color: {theme.TEXT_PRIMARY}; font-size: 14px; font-weight: 600; }}
-            #footer {{ color: {theme.TEXT_MUTED}; font-size: 11px; }}
-            QPushButton {{
-                background: {theme.SURFACE};
-                color: {theme.TEXT_SECONDARY};
-                border: 1px solid {theme.BORDER};
-                border-radius: 6px;
-                padding: 4px 10px;
-            }}
-            QPushButton:hover {{ color: {theme.TEXT_PRIMARY}; border-color: {theme.TEXT_MUTED}; }}
-            """
-        )
-        self._cards: dict[str, ProviderCard] = {}
-        self.cards_layout = QVBoxLayout()
-        self.cards_layout.setSpacing(8)
-        self.footer = QLabel("")
-        self.footer.setObjectName("footer")
-
-        header = QLabel("Лимиты AI-провайдеров")
-        header.setObjectName("header")
-        self.refresh_btn = QPushButton("Обновить")
-        self.refresh_btn.clicked.connect(self.refresh_requested)
-        top = QHBoxLayout()
-        top.addWidget(header)
-        top.addStretch()
-        top.addWidget(self.refresh_btn)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 8)
-        layout.setSpacing(8)
-        layout.addLayout(top)
-        layout.addLayout(self.cards_layout)
-        layout.addWidget(self.footer)
-
-    def update_snapshots(self, snapshots: list[ProviderSnapshot]) -> None:
-        for snap in snapshots:
-            card = self._cards.get(snap.provider)
-            if card is None:
-                card = ProviderCard()
-                self._cards[snap.provider] = card
-                self.cards_layout.addWidget(card)
-            card.update_snapshot(snap)
-        self.footer.setText(
-            f"AIBar v{__version__} · Обновлено {datetime.now().strftime('%H:%M:%S')}"
-        )
-        self.adjustSize()
-
-    def clear_cards(self) -> None:
-        for card in self._cards.values():
-            self.cards_layout.removeWidget(card)
-            card.deleteLater()
-        self._cards.clear()
-
-    # Keep the panel open while the mouse is over it
-    def enterEvent(self, event) -> None:
-        self.hover_changed.emit(True)
-        super().enterEvent(event)
-
-    def leaveEvent(self, event) -> None:
-        self.hover_changed.emit(False)
-        super().leaveEvent(event)
-
-    def paintEvent(self, event) -> None:
-        # Translucent frameless window: paint the rounded surface manually.
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(QColor(255, 255, 255, 26))
-        painter.setBrush(QColor(theme.PAGE))
-        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 10, 10)
-        painter.end()
-
-
 class GaugeTile(QWidget):
     """One provider's gauge with a caption underneath."""
 
@@ -218,15 +136,18 @@ class GaugeTile(QWidget):
 
 
 class DesktopWidget(QWidget):
-    """The floating always-on-top column of gauges."""
+    """The floating always-on-top row/column of gauges."""
 
     geometry_changed = Signal()
     refresh_requested = Signal()
     settings_requested = Signal()
     help_requested = Signal()
-    hide_requested = Signal()
+    hide_requested = Signal()  # hide the widget entirely (stays in tray)
+    hide_on_idle_changed = Signal(bool)
+    check_updates_requested = Signal()
     quit_requested = Signal()
     mode_changed = Signal(str)  # "full" | "mini"
+    dashboard_requested = Signal()  # left-click: show the full dashboard
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -236,6 +157,7 @@ class DesktopWidget(QWidget):
         self.resize(120, 260)
 
         self._drag_offset: QPoint | None = None
+        self._press_pos: QPoint | None = None  # to tell click from drag
         self._tiles: dict[str, GaugeTile] = {}
         self._context_menu: QMenu | None = None
         self._snapshots: list[ProviderSnapshot] = []
@@ -245,8 +167,14 @@ class DesktopWidget(QWidget):
         self._activity: list[tuple[float, dict[str, float]]] = []
         self._last_solo: str | None = None
 
-        self.tiles_layout = QVBoxLayout()
-        self.tiles_layout.setSpacing(6)
+        # Tiles live in a container whose layout we swap between vertical and
+        # horizontal. Both layouts are kept as references so tests can inspect
+        # either; only the active one is installed on the container.
+        self.tiles_vbox = QVBoxLayout()
+        self.tiles_vbox.setSpacing(6)
+        self.tiles_hbox = QHBoxLayout()
+        self.tiles_hbox.setSpacing(6)
+        self._horizontal = False
 
         grip = QSizeGrip(self)
         grip.setStyleSheet("background: transparent; width: 14px; height: 14px;")
@@ -258,16 +186,18 @@ class DesktopWidget(QWidget):
         layout.setContentsMargins(10, 10, 10, 2)
         layout.addWidget(self.update_badge)
         layout.addWidget(self.vpn_badge)
-        layout.addLayout(self.tiles_layout, stretch=1)
+        # tiles_vbox is the active layout by default (vertical).
+        layout.addLayout(self.tiles_vbox, stretch=1)
         layout.addWidget(grip, alignment=Qt.AlignBottom | Qt.AlignRight)
 
-        self.panel = HoverPanel()
-        self.panel.hover_changed.connect(self._on_panel_hover)
-        self.panel.refresh_requested.connect(self.refresh_requested)
-        self._hide_timer = QTimer(self)
-        self._hide_timer.setSingleShot(True)
-        self._hide_timer.setInterval(350)
-        self._hide_timer.timeout.connect(self.panel.hide)
+        # Auto-hide state (Feature 2): off unless hide_on_idle is enabled.
+        self._hide_on_idle = False
+        self._hidden = False
+        self._pre_hide_pos: QPoint | None = None
+        self._idle_hide_timer = QTimer(self)
+        self._idle_hide_timer.setSingleShot(True)
+        self._idle_hide_timer.setInterval(HIDE_DELAY)
+        self._idle_hide_timer.timeout.connect(self._slide_off)
 
         # Debounced geometry persistence
         self._geometry_timer = QTimer(self)
@@ -282,26 +212,133 @@ class DesktopWidget(QWidget):
             if tile is None:
                 tile = GaugeTile(snap.provider)
                 self._tiles[snap.provider] = tile
-                self.tiles_layout.addWidget(tile, stretch=1)
+                self._add_tile_to_active_layout(tile)
             tile.update_snapshot(snap)
         self._snapshots = snapshots
         self.vpn_badge.setVisible(any(s.paused for s in snapshots))
         self._record_activity(snapshots)
         self._apply_visibility()
-        # the hover panel always shows every provider, regardless of mode
-        self.panel.update_snapshots(snapshots)
+
+    def _add_tile_to_active_layout(self, tile: GaugeTile, stretch: int = 1) -> None:
+        layout = self.tiles_hbox if self._horizontal else self.tiles_vbox
+        layout.addWidget(tile, stretch=stretch)
 
     def clear_tiles(self) -> None:
         for tile in self._tiles.values():
-            self.tiles_layout.removeWidget(tile)
+            self.tiles_vbox.removeWidget(tile)
+            self.tiles_hbox.removeWidget(tile)
+            tile.setParent(None)
             tile.deleteLater()
         self._tiles.clear()
         self._activity.clear()
         self._last_solo = None
-        self.panel.clear_cards()
 
     def set_update_available(self, version: str) -> None:
         self.update_badge.show_version(version)
+
+    # ---- orientation (Feature 1) ----------------------------------------
+    def _active_tiles_layout(self):
+        """The layout currently installed in the widget (vertical by default)."""
+        return self.tiles_hbox if self._horizontal else self.tiles_vbox
+
+    def _set_orientation(self, horizontal: bool) -> None:
+        """Switch tiles between the vertical and horizontal layouts.
+
+        Both layouts are kept as instance attributes; the one matching the new
+        orientation becomes the *active* (installed) layout and owns the tiles.
+        """
+        if horizontal == self._horizontal:
+            return
+        old = self._active_tiles_layout()
+        new = self.tiles_hbox if horizontal else self.tiles_vbox
+        # Detach every tile widget from the old layout, then attach to the new.
+        tiles = list(self._tiles.values())
+        for tile in tiles:
+            old.removeWidget(tile)
+            new.addWidget(tile, stretch=1)
+        # Swap which layout is installed on the widget's main layout. We find
+        # the index where the old tile-layout sat and replace it with the new.
+        main = self.layout()
+        replaced = False
+        for i in range(main.count()):
+            item = main.itemAt(i)
+            if item is old or item.layout() is old:
+                main.removeItem(item)
+                main.insertLayout(i, new)
+                replaced = True
+                break
+        if not replaced:
+            # Fallback: just append (shouldn't normally happen).
+            main.addLayout(new)
+        self._horizontal = horizontal
+        # Reshape the minimum size sensibly per orientation.
+        if horizontal:
+            self.setMinimumSize(60, 45)
+        else:
+            self.setMinimumSize(45, 60)
+
+    def _edge_orientation(self) -> bool | None:
+        """Return desired horizontal flag from the nearest edge, or None if free."""
+        screen = self.screen().availableGeometry()
+        geo = self.frameGeometry()
+        if geo.top() - screen.top() <= EDGE_THRESHOLD:
+            return True  # top edge -> horizontal
+        if screen.bottom() - geo.bottom() <= EDGE_THRESHOLD:
+            return True  # bottom edge -> horizontal
+        if geo.left() - screen.left() <= EDGE_THRESHOLD:
+            return False  # left edge -> vertical
+        if screen.right() - geo.right() <= EDGE_THRESHOLD:
+            return False  # right edge -> vertical
+        return None  # mid-screen: keep current
+
+    def _apply_edge_orientation(self) -> None:
+        desired = self._edge_orientation()
+        if desired is not None:
+            self._set_orientation(desired)
+
+    # ---- auto-hide (Feature 2) ------------------------------------------
+    def set_hide_on_idle(self, enabled: bool) -> None:
+        self._hide_on_idle = bool(enabled)
+        if self._hide_on_idle:
+            self._idle_hide_timer.start()  # begin the countdown now
+        else:
+            self._idle_hide_timer.stop()
+            self._slide_in()  # make sure it's fully visible again
+
+    def _nearest_edge_offset(self) -> tuple[int, int, str]:
+        """Return (dx, dy, which) to slide the widget off its nearest edge."""
+        screen = self.screen().availableGeometry()
+        geo = self.frameGeometry()
+        margins = {
+            "top": geo.top() - screen.top(),
+            "bottom": screen.bottom() - geo.bottom(),
+            "left": geo.left() - screen.left(),
+            "right": screen.right() - geo.right(),
+        }
+        which = min(margins, key=margins.get)
+        w, h = geo.width(), geo.height()
+        if which == "top":
+            return (0, -(h - HIDE_SLIVER), "top")
+        if which == "bottom":
+            return (0, h - HIDE_SLIVER, "bottom")
+        if which == "left":
+            return (-(w - HIDE_SLIVER), 0, "left")
+        return (w - HIDE_SLIVER, 0, "right")
+
+    def _slide_off(self) -> None:
+        if not self._hide_on_idle or self._hidden:
+            return
+        dx, dy, _ = self._nearest_edge_offset()
+        self._pre_hide_pos = self.pos()
+        self.move(self.pos().x() + dx, self.pos().y() + dy)
+        self._hidden = True
+
+    def _slide_in(self) -> None:
+        if not self._hidden:
+            return
+        if self._pre_hide_pos is not None:
+            self.move(self._pre_hide_pos)
+        self._hidden = False
 
     # ---- mini mode -------------------------------------------------------
     def set_mode(self, mode: str) -> None:
@@ -369,22 +406,38 @@ class DesktopWidget(QWidget):
         painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 12, 12)
         painter.end()
 
-    # ---- drag to move ---------------------------------------------------
+    # ---- drag to move / click to open dashboard -------------------------
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
             self._drag_offset = (
                 event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             )
+            self._press_pos = event.globalPosition().toPoint()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
         if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
+            # If it was hidden (auto-hide), reveal it at the cursor as we drag.
+            if self._hidden:
+                self._slide_in()
             self.move(event.globalPosition().toPoint() - self._drag_offset)
-            self._reposition_panel()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
-        self._drag_offset = None
+        if event.button() == Qt.LeftButton:
+            moved = 0
+            if self._press_pos is not None:
+                moved = (
+                    event.globalPosition().toPoint() - self._press_pos
+                ).manhattanLength()
+            self._drag_offset = None
+            self._press_pos = None
+            # A press-release with negligible movement is a click -> dashboard.
+            if moved < CLICK_THRESHOLD:
+                self.dashboard_requested.emit()
+            else:
+                # Reorient after a real drag based on the nearest screen edge.
+                self._apply_edge_orientation()
         super().mouseReleaseEvent(event)
 
     def contextMenuEvent(self, event) -> None:
@@ -404,6 +457,11 @@ class DesktopWidget(QWidget):
         settings.triggered.connect(self.settings_requested)
         help_action = QAction("Справка", menu)
         help_action.triggered.connect(self.help_requested)
+        hide_idle = QAction("Скрывать виджет при простое", menu, checkable=True)
+        hide_idle.setChecked(self._hide_on_idle)
+        hide_idle.toggled.connect(self.hide_on_idle_changed)
+        check_updates = QAction("Проверить обновления…", menu)
+        check_updates.triggered.connect(self.check_updates_requested)
         hide = QAction("Скрыть виджет (остаётся в трее)", menu)
         hide.triggered.connect(self.hide_requested)
         quit_action = QAction("Выход", menu)
@@ -412,43 +470,37 @@ class DesktopWidget(QWidget):
         menu.addAction(mini)
         menu.addAction(settings)
         menu.addAction(help_action)
+        menu.addAction(hide_idle)
+        menu.addAction(check_updates)
         menu.addAction(hide)
         menu.addSeparator()
         menu.addAction(quit_action)
+        # While the context menu is open, don't let the widget auto-hide.
+        self._idle_hide_timer.stop()
+        menu.aboutToHide.connect(self._maybe_restart_idle_timer)
         self._context_menu = menu  # keep alive: popup() is non-blocking
         menu.popup(event.globalPos())
 
-    # ---- hover panel ----------------------------------------------------
+    def _maybe_restart_idle_timer(self) -> None:
+        if self._hide_on_idle and not self._hidden:
+            self._idle_hide_timer.start()
+
+    # ---- hover: now only drives the auto-hide timer ---------------------
     def enterEvent(self, event) -> None:
-        self._hide_timer.stop()
-        self._reposition_panel()
-        self.panel.show()
+        self._idle_hide_timer.stop()
+        if self._hidden:
+            self._slide_in()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
-        self._hide_timer.start()
+        if self._hide_on_idle:
+            self._idle_hide_timer.start()
         super().leaveEvent(event)
-
-    def _on_panel_hover(self, inside: bool) -> None:
-        if inside:
-            self._hide_timer.stop()
-        else:
-            self._hide_timer.start()
-
-    def _reposition_panel(self) -> None:
-        self.panel.adjustSize()
-        screen = self.screen().availableGeometry()
-        geo = self.frameGeometry()
-        x = geo.left() - self.panel.width() - 8
-        if x < screen.left() + 8:  # no room on the left — open to the right
-            x = geo.right() + 8
-        y = min(geo.top(), screen.bottom() - self.panel.height() - 8)
-        y = max(y, screen.top() + 8)
-        self.panel.move(x, y)
 
     # ---- geometry persistence -------------------------------------------
     def moveEvent(self, event) -> None:
-        self._geometry_timer.start()
+        if not self._hidden:  # don't persist the off-screen slide position
+            self._geometry_timer.start()
         super().moveEvent(event)
 
     def resizeEvent(self, event) -> None:
@@ -457,5 +509,5 @@ class DesktopWidget(QWidget):
         super().resizeEvent(event)
 
     def hideEvent(self, event) -> None:
-        self.panel.hide()
+        self._idle_hide_timer.stop()
         super().hideEvent(event)

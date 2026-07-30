@@ -8,13 +8,14 @@ import threading
 
 from PySide6.QtCore import QObject, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QProgressDialog, QSystemTrayIcon
 
 from . import __version__, config, theme
 from .geoblock import GeoBlockGuard
 from .help import open_help
 from .polling import poll_all
 from .update import UpdateChecker
+from .updater import Updater
 from .providers.base import ProviderSnapshot
 from .ui import DashboardWindow, DesktopWidget
 from .ui.settings import SettingsDialog
@@ -103,6 +104,9 @@ class AIBarApp:
         self.widget.set_mini_threshold(float(self.cfg.get("mini_threshold") or 70))
         self.widget.set_mode(self.cfg.get("widget_mode", "full"))
         self.widget.hide_requested.connect(lambda: self.set_widget_enabled(False))
+        self.widget.hide_on_idle_changed.connect(self.set_widget_hide_on_idle)
+        self.widget.check_updates_requested.connect(self.check_updates)
+        self.widget.dashboard_requested.connect(self.show_dashboard_at_widget)
         self.widget.quit_requested.connect(app.quit)
         self.widget.geometry_changed.connect(self.save_widget_geometry)
         geometry = self.cfg.get("widget_geometry")
@@ -111,6 +115,7 @@ class AIBarApp:
         else:
             screen = app.primaryScreen().availableGeometry()
             self.widget.move(screen.right() - self.widget.width() - 16, screen.top() + 60)
+        self.widget.set_hide_on_idle(bool(self.cfg.get("widget_hide_on_idle", False)))
         if self.cfg.get("widget_enabled", True):
             self.widget.show()
 
@@ -132,6 +137,10 @@ class AIBarApp:
         self.update_timer.start(60 * 60 * 1000)  # hourly
         self.update_checker.check()
 
+        # On-demand download + apply (manual "Проверить обновления").
+        self.updater = Updater()
+        self._update_progress: QProgressDialog | None = None
+
     def _build_menu(self) -> QMenu:
         menu = QMenu()
         version_action = QAction(f"AIBar v{__version__}", menu)
@@ -145,6 +154,16 @@ class AIBarApp:
         self.widget_action = QAction("Виджет поверх окон", menu, checkable=True)
         self.widget_action.setChecked(self.cfg.get("widget_enabled", True))
         self.widget_action.toggled.connect(self.set_widget_enabled)
+        # "Скрывать виджет" is only meaningful while the widget is shown.
+        self.hide_idle_action = QAction("Скрывать виджет", menu, checkable=True)
+        self.hide_idle_action.setChecked(self.cfg.get("widget_hide_on_idle", False))
+        self.hide_idle_action.toggled.connect(self.set_widget_hide_on_idle)
+        self.hide_idle_action.setVisible(self.widget_action.isChecked())
+        self.widget_action.toggled.connect(
+            lambda on: self.hide_idle_action.setVisible(on)
+        )
+        check_updates_action = QAction("Проверить обновления…", menu)
+        check_updates_action.triggered.connect(self.check_updates)
         settings_action = QAction("Настройки…", menu)
         settings_action.triggered.connect(self.show_settings)
         help_action = QAction("Справка", menu)
@@ -152,6 +171,7 @@ class AIBarApp:
         menu.addAction(open_action)
         menu.addAction(refresh_action)
         menu.addAction(self.widget_action)
+        menu.addAction(self.hide_idle_action)
         menu.addAction(settings_action)
         menu.addAction(help_action)
 
@@ -167,6 +187,7 @@ class AIBarApp:
             interval_menu.addAction(action)
 
         menu.addSeparator()
+        menu.addAction(check_updates_action)
         quit_action = QAction("Выход", menu)
         quit_action.triggered.connect(self.app.quit)
         menu.addAction(quit_action)
@@ -206,6 +227,103 @@ class AIBarApp:
         if self.widget_action.isChecked() != enabled:
             self.widget_action.setChecked(enabled)
         self.widget.setVisible(enabled)
+        # "Скрывать виджет" only makes sense while the widget is shown.
+        if hasattr(self, "hide_idle_action"):
+            self.hide_idle_action.setVisible(enabled)
+            if not enabled:
+                # Widget off: stop idle-hiding regardless of the toggle.
+                self.widget.set_hide_on_idle(False)
+
+    def set_widget_hide_on_idle(self, enabled: bool) -> None:
+        self.cfg["widget_hide_on_idle"] = enabled
+        config.save(self.cfg)
+        if self.hide_idle_action.isChecked() != enabled:
+            self.hide_idle_action.setChecked(enabled)
+        self.widget.set_hide_on_idle(enabled)
+
+    def show_dashboard_at_widget(self) -> None:
+        """Open the dashboard popup anchored next to the widget (left-click)."""
+        if self.dashboard.isVisible():
+            self.dashboard.hide()
+            return
+        if self.snapshots:
+            self.dashboard.update_snapshots(self.snapshots)
+        geo = self.widget.frameGeometry()
+        screen = self.widget.screen().availableGeometry()
+        x = geo.left() - self.dashboard.sizeHint().width() - 8
+        if x < screen.left() + 8:  # no room on the left — open to the right
+            x = geo.right() + 8
+        y = min(geo.top(), screen.bottom() - self.dashboard.sizeHint().height() - 8)
+        y = max(y, screen.top() + 8)
+        self.dashboard.show_at(x + self.dashboard.sizeHint().width() // 2, y)
+
+    def check_updates(self) -> None:
+        """Manually check the latest release and download it if newer."""
+        if self.updater.is_running:
+            return
+        self.updater.progress.connect(self._on_update_progress)
+        self.updater.downloaded.connect(self._on_update_downloaded)
+        self.updater.up_to_date.connect(self._on_update_uptodate)
+        self.updater.failed.connect(self._on_update_failed)
+        self.updater.check_and_download()
+
+    def _on_update_progress(self, percent: int) -> None:
+        if self._update_progress is None:
+            self._update_progress = QProgressDialog(
+                "Загрузка обновления…", "Отмена", 0, 100
+            )
+            self._update_progress.setWindowTitle("AIBar")
+            self._update_progress.setWindowModality(Qt.NonModal)
+            self._update_progress.setMinimumDuration(0)
+            self._update_progress.canceled.connect(self.updater.cancel)
+            self._update_progress.show()
+        self._update_progress.setValue(percent)
+
+    def _on_update_downloaded(self, version: str, path: str) -> None:
+        if self._update_progress is not None:
+            self._update_progress.close()
+            self._update_progress = None
+        self.tray.showMessage(
+            "AIBar",
+            f"Скачана версия {version}. Файл в папке «Загрузки», "
+            "на рабочем столе обновлён ярлык.",
+            QSystemTrayIcon.Information,
+            5000,
+        )
+        box = QMessageBox(
+            QMessageBox.Question,
+            "AIBar",
+            f"Скачана версия {version}.\nФайл: {path}\n\n"
+            "На рабочем столе обновлён ярлык «AIBar».\n"
+            "Перезапустить AIBar для применения обновления?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if box.exec() == QMessageBox.Yes:
+            import subprocess
+
+            # Launch the new build detached, then quit the current one so the
+            # OS releases the file lock on the running executable.
+            try:
+                subprocess.Popen([path])
+                self.app.quit()
+            except OSError:
+                pass  # user can still run the shortcut manually
+
+    def _on_update_uptodate(self, current: str) -> None:
+        self.tray.showMessage(
+            "AIBar",
+            f"У вас последняя версия ({current}).",
+            QSystemTrayIcon.Information,
+            3000,
+        )
+
+    def _on_update_failed(self, message: str) -> None:
+        if self._update_progress is not None:
+            self._update_progress.close()
+            self._update_progress = None
+        self.tray.showMessage(
+            "AIBar", message, QSystemTrayIcon.Warning, 4000
+        )
 
     def save_widget_geometry(self) -> None:
         geo = self.widget.geometry()
