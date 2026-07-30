@@ -1,19 +1,21 @@
 """Always-on-top desktop widget: a row or column of per-provider radial gauges.
 
-Behaviour (v0.6.0):
-- Orientation is live: while dragging, as soon as the frame touches a screen
-  edge it snaps to that edge's orientation (vertical at left/right, horizontal
-  at top/bottom) and the position is clamped to the screen — it can't be
-  dragged off-screen.
+Behaviour:
+- Orientation is live: while dragging the centre of the widget, as soon as the
+  frame touches a screen edge it snaps to that edge's orientation (vertical at
+  left/right, horizontal at top/bottom) and is clamped to the screen.
 - On an orientation change the *frame* itself transposes (w <-> h) around its
   center, so the gauges keep their size; only their layout (row vs column)
   changes.
-- Left-click opens the full dashboard popup; right-click opens the menu.
-- "Скрывать виджет": after 5s idle the widget slides off the nearest screen
-  edge, leaving ~15% of its frame as a "bookmark" tab; hovering that tab
-  slides it back and docks it flush to the edge.
+- Resize: the frame can be resized by dragging any of its four edges or four
+  corners (hit-tested against a thin margin). The centre area drags the widget.
+- Left-click on the centre opens the full dashboard popup; right-click opens
+  the menu.
+- "Скрывать виджет": when enabled, a polling timer watches the real cursor
+  position; after a short idle the widget slides off the nearest screen edge,
+  leaving ~15% of its frame as a "bookmark" tab; bringing the cursor over that
+  tab slides it back and docks it flush to the edge.
 - The soonest-reset countdown across visible tiles is shown on the widget.
-- A context-menu slider (50-150%) scales the whole widget.
 """
 
 import time
@@ -34,12 +36,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
-    QPushButton,
-    QSizeGrip,
-    QSlider,
     QVBoxLayout,
     QWidget,
-    QWidgetAction,
 )
 
 from .. import __version__, theme
@@ -53,31 +51,26 @@ WIDGET_FLAGS = Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
 
 # Distance (px) from a screen edge at which the widget is "docked".
 EDGE_THRESHOLD = 0  # touching counts as docked
-# Fraction of the frame left poking out when auto-hidden (Feature 3).
+# Fraction of the frame left poking out when auto-hidden.
 HIDE_VISIBLE_FRACTION = 0.15
-# Auto-hide delay (ms) after the cursor truly leaves the widget. Kept small so
-# hiding feels immediate, but non-zero to debounce spurious leaveEvent bursts
-# (frameless translucent windows get enter/leave flurries on tooltip overlap).
-HIDE_DELAY = 300
-# Auto-hide slide animation duration (ms): smooth slide behind the screen edge
-# over ~1 second, leaving ~15% of the frame visible.
+# Grace period (s) after the cursor leaves before hiding kicks in.
+HIDE_DELAY = 0.4
+# Auto-hide slide animation duration (ms).
 HIDE_ANIM_MS = 1000
+# How often the auto-hide poller checks the cursor position (ms).
+HIDE_POLL_MS = 350
 # A mouse move shorter than this (px) is treated as a click, not a drag.
 CLICK_THRESHOLD = 4
-
-DEFAULT_SCALE = 1.0
-MIN_SCALE = 0.75
-MAX_SCALE = 1.5
+# Resize hit-test margin (px from each edge) and minimum frame size.
+RESIZE_MARGIN = 8
+MIN_W = 80
+MIN_H = 80
+DEFAULT_W = 120
+DEFAULT_H = 260
 
 
 def _widget_countdown(windows, now=None) -> str:
-    """Two-unit countdown to the soonest window reset, shown on a tile.
-
-    Same logic as the dashboard's ``↺`` countdown, but formatted as a bare
-    two-unit value (no ``↺`` prefix): ``"1ч 22м"`` for short windows (e.g. the
-    5-hour session) and ``"2д 5ч"`` for long ones (e.g. Codex's weekly window).
-    Empty when no window has a reset time.
-    """
+    """Two-unit countdown to the soonest window reset, shown on a tile."""
     now = now if now is not None else datetime.now(timezone.utc)
     soonest = min(
         (w for w in windows if w.resets_at),
@@ -219,26 +212,29 @@ class DesktopWidget(QWidget):
     help_requested = Signal()
     hide_requested = Signal()  # hide the widget entirely (stays in tray)
     hide_on_idle_changed = Signal(bool)
-    scale_changed = Signal(float)  # widget zoom factor (0.5..1.5)
     check_updates_requested = Signal()
     quit_requested = Signal()
     mode_changed = Signal(str)  # "full" | "mini"
     dashboard_requested = Signal()  # left-click: show the full dashboard
 
-    # Base (100% scale) frame size in each orientation.
-    BASE_W = 120
-    BASE_H = 260
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(WIDGET_FLAGS)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.resize(self.BASE_W, self.BASE_H)
+        self.setMinimumSize(MIN_W, MIN_H)
+        self.resize(DEFAULT_W, DEFAULT_H)
+        # Track mouse even without a button held, so we can set the resize
+        # cursor when hovering an edge.
+        self.setMouseTracking(True)
 
-        self._scale = DEFAULT_SCALE
         self._drag_offset: QPoint | None = None
         self._press_pos: QPoint | None = None  # to tell click from drag
         self._dragging = False
+        # Edge-resize state.
+        self._resize_edge: str = ""  # any combination of 'l','r','t','b'
+        self._resize_start_geo: QRect | None = None
+        self._resize_start_global: QPoint | None = None
+
         self._tiles: dict[str, GaugeTile] = {}
         self._context_menu: QMenu | None = None
         self._snapshots: list[ProviderSnapshot] = []
@@ -255,9 +251,6 @@ class DesktopWidget(QWidget):
         self.tiles_hbox.setSpacing(6)
         self._horizontal = False  # vertical by default
 
-        grip = QSizeGrip(self)
-        grip.setStyleSheet("background: transparent; width: 14px; height: 14px;")
-
         self.update_badge = UpdateBadge(self)
         self.vpn_badge = VpnBadge(self)
 
@@ -266,17 +259,16 @@ class DesktopWidget(QWidget):
         layout.addWidget(self.update_badge)
         layout.addWidget(self.vpn_badge)
         layout.addLayout(self.tiles_vbox, stretch=1)  # vertical is active
-        layout.addWidget(grip, alignment=Qt.AlignBottom | Qt.AlignRight)
 
-        # Auto-hide state.
+        # Auto-hide state (polling-based for reliability on translucent windows).
         self._hide_on_idle = False
         self._hidden = False
         self._hidden_anchor: str | None = None  # which edge we slid behind
         self._docked_pos: QPoint | None = None  # flush-to-edge visible position
-        self._idle_hide_timer = QTimer(self)
-        self._idle_hide_timer.setSingleShot(True)
-        self._idle_hide_timer.setInterval(HIDE_DELAY)
-        self._idle_hide_timer.timeout.connect(self._slide_off)
+        self._last_active: float = time.time()
+        self._idle_check_timer = QTimer(self)
+        self._idle_check_timer.setInterval(HIDE_POLL_MS)
+        self._idle_check_timer.timeout.connect(self._on_idle_check)
         # Smooth slide animation for hide/show (animates pos()).
         self._slide_anim: QPropertyAnimation | None = None
 
@@ -285,8 +277,6 @@ class DesktopWidget(QWidget):
         self._geometry_timer.setSingleShot(True)
         self._geometry_timer.setInterval(800)
         self._geometry_timer.timeout.connect(self.geometry_changed)
-
-        self._apply_scale(DEFAULT_SCALE)
 
     # ---- helpers --------------------------------------------------------
     def _available_geometry(self) -> QRect:
@@ -344,32 +334,7 @@ class DesktopWidget(QWidget):
     def set_update_available(self, version: str) -> None:
         self.update_badge.show_version(version)
 
-    # ---- scale (Feature 2) ---------------------------------------------
-    def set_scale(self, scale: float) -> None:
-        scale = max(MIN_SCALE, min(MAX_SCALE, float(scale)))
-        if abs(scale - self._scale) < 1e-3:
-            return
-        self.scale_changed.emit(scale)
-        self._apply_scale(scale)
-
-    def _apply_scale(self, scale: float) -> None:
-        """Resize the frame around its center, keeping orientation."""
-        self._scale = scale
-        center = self._center()
-        if self._horizontal:
-            w = int(self.BASE_H * scale)
-            h = int(self.BASE_W * scale)
-        else:
-            w = int(self.BASE_W * scale)
-            h = int(self.BASE_H * scale)
-        self.setMinimumSize(w, h)
-        self.resize(w, h)
-        # re-center, clamped to screen
-        pos = QPoint(center.x() - w // 2, center.y() - h // 2)
-        self.move(self._clamp_to_screen(pos))
-        self.update_badge.relabel_for_width()
-
-    # ---- orientation (Feature 1) ---------------------------------------
+    # ---- orientation ----------------------------------------------------
     def _transpose_frame(self) -> None:
         """Swap the frame's width and height around its center.
 
@@ -377,15 +342,7 @@ class DesktopWidget(QWidget):
         """
         center = self._center()
         new_w, new_h = self.height(), self.width()
-        scale = self._scale
-        # Base size depends on orientation so the frame is always consistent.
-        if self._horizontal:
-            new_w = int(self.BASE_H * scale)
-            new_h = int(self.BASE_W * scale)
-        else:
-            new_w = int(self.BASE_W * scale)
-            new_h = int(self.BASE_H * scale)
-        self.setMinimumSize(new_w, new_h)
+        self.setMinimumSize(min(MIN_W, new_w), min(MIN_H, new_h))
         self.resize(new_w, new_h)
         pos = QPoint(center.x() - new_w // 2, center.y() - new_h // 2)
         self.move(self._clamp_to_screen(pos))
@@ -445,16 +402,14 @@ class DesktopWidget(QWidget):
             pos = QPoint(screen.right() - self.width() + 1, geo.top())
         self.move(self._clamp_to_screen(pos))
 
-    # ---- auto-hide (Feature 3) -----------------------------------------
+    # ---- auto-hide ------------------------------------------------------
     def set_hide_on_idle(self, enabled: bool) -> None:
         self._hide_on_idle = bool(enabled)
-        self._idle_hide_timer.stop()
         if self._hide_on_idle:
-            # Arm the timer only if the cursor is actually off the widget;
-            # otherwise wait for a real leave before hiding.
-            if not self._cursor_inside():
-                self._idle_hide_timer.start()
+            self._last_active = time.time()
+            self._idle_check_timer.start()
         else:
+            self._idle_check_timer.stop()
             # Option off: the widget MUST be fully visible again.
             self._slide_in()
 
@@ -494,10 +449,9 @@ class DesktopWidget(QWidget):
         """Slide the widget behind the nearest screen edge, leaving ~15% as a tab."""
         if not self._hide_on_idle or self._hidden:
             return
-        # Don't hide while the cursor is genuinely over the widget (guard
-        # against spurious leaveEvent bursts from the translucent window).
+        # Refuse while the cursor is genuinely over the widget (the poller
+        # retries shortly).
         if self._cursor_inside():
-            self._idle_hide_timer.start()  # re-check shortly
             return
         edge = self._nearest_docked_edge()
         if edge is None:
@@ -512,6 +466,23 @@ class DesktopWidget(QWidget):
         self._hidden_anchor = edge
         self._hidden = True
         self._animate_to(self._hide_target(edge))
+
+    def _on_idle_check(self) -> None:
+        """Polling-based auto-hide watcher.
+
+        enter/leave events on a translucent frameless window are unreliable, so
+        this checks the real cursor position on a timer and drives the hide/show
+        transitions deterministically.
+        """
+        if not self._hide_on_idle:
+            return
+        if self._cursor_inside():
+            self._last_active = time.time()
+            if self._hidden:
+                self._slide_in()
+        else:
+            if not self._hidden and (time.time() - self._last_active) >= HIDE_DELAY:
+                self._slide_off()
 
     def _nearest_edge_by_distance(self) -> str | None:
         """Closest screen edge by raw distance (for mid-screen auto-hide)."""
@@ -619,27 +590,113 @@ class DesktopWidget(QWidget):
         painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 12, 12)
         painter.end()
 
+    # ---- resize (all four edges and corners) ----------------------------
+    def _hit_test(self, local: QPoint) -> str:
+        """Return the edge(s) under a local point: a string of 'l','r','t','b'.
+
+        Empty string means the point is in the drag/click area.
+        """
+        on_l = local.x() <= RESIZE_MARGIN
+        on_r = local.x() >= self.width() - 1 - RESIZE_MARGIN
+        on_t = local.y() <= RESIZE_MARGIN
+        on_b = local.y() >= self.height() - 1 - RESIZE_MARGIN
+        edge = ""
+        if on_t:
+            edge += "t"
+        if on_b:
+            edge += "b"
+        if on_l:
+            edge += "l"
+        if on_r:
+            edge += "r"
+        return edge
+
+    @staticmethod
+    def _cursor_for_edge(edge: str) -> Qt.CursorShape:
+        # Corners first.
+        if edge in ("tl", "br"):
+            return Qt.SizeFDiagCursor
+        if edge in ("tr", "bl"):
+            return Qt.SizeBDiagCursor
+        if edge in ("l", "r"):
+            return Qt.SizeHorCursor
+        if edge in ("t", "b"):
+            return Qt.SizeVerCursor
+        return Qt.ArrowCursor
+
+    def _update_hover_cursor(self, local: QPoint) -> None:
+        edge = self._hit_test(local)
+        self.setCursor(self._cursor_for_edge(edge))
+
+    def _do_resize(self, global_pos: QPoint) -> None:
+        g = self._resize_start_geo
+        start = self._resize_start_global
+        edge = self._resize_edge
+        if g is None or start is None or not edge:
+            return
+        dg = global_pos - start
+        left, top = g.left(), g.top()
+        right, bottom = g.right() + 1, g.bottom() + 1
+        if "l" in edge:
+            left = min(g.left() + dg.x(), right - MIN_W)
+        if "r" in edge:
+            right = max(g.right() + 1 + dg.x(), left + MIN_W)
+        if "t" in edge:
+            top = min(g.top() + dg.y(), bottom - MIN_H)
+        if "b" in edge:
+            bottom = max(g.bottom() + 1 + dg.y(), top + MIN_H)
+        new_w = right - left
+        new_h = bottom - top
+        # Keep the whole frame on-screen.
+        screen = self._available_geometry()
+        left = max(screen.left(), left)
+        top = max(screen.top(), top)
+        if left + new_w - 1 > screen.right():
+            left = screen.right() - new_w + 1
+        if top + new_h - 1 > screen.bottom():
+            top = screen.bottom() - new_h + 1
+        self.setGeometry(left, top, new_w, new_h)
+
     # ---- drag to move / click to open dashboard -------------------------
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
-            self._drag_offset = (
-                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            )
-            self._press_pos = event.globalPosition().toPoint()
-            self._dragging = False
-            # A click means the user wants to interact: stop any hide/show
-            # animation so the drag isn't fought by the animator.
             self._stop_slide_anim()
-            self._idle_hide_timer.stop()
+            local = event.position().toPoint()
+            gpos = event.globalPosition().toPoint()
+            edge = self._hit_test(local)
+            if edge:
+                # Resize from this edge/corner.
+                self._resize_edge = edge
+                self._resize_start_geo = self.geometry()
+                self._resize_start_global = gpos
+                self._dragging = False
+                self._drag_offset = None
+                self._press_pos = None
+            else:
+                self._drag_offset = gpos - self.frameGeometry().topLeft()
+                self._press_pos = gpos
+                self._dragging = False
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
-        if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
+        if not (event.buttons() & Qt.LeftButton):
+            # Hover: just keep the resize cursor in sync.
+            self._update_hover_cursor(event.position().toPoint())
+            super().mouseMoveEvent(event)
+            return
+
+        gpos = event.globalPosition().toPoint()
+        if self._resize_edge:
+            self._do_resize(gpos)
+            super().mouseMoveEvent(event)
+            return
+
+        if self._drag_offset is not None:
             # While dragging the widget is fully visible (no slide animation).
             if self._hidden:
                 self._hidden = False
                 self._hidden_anchor = None
-            target = event.globalPosition().toPoint() - self._drag_offset
+            target = gpos - self._drag_offset
             # Clamp: the widget can't leave the screen.
             clamped = self._clamp_to_screen(target)
             self.move(clamped)
@@ -659,15 +716,18 @@ class DesktopWidget(QWidget):
                 moved = (
                     event.globalPosition().toPoint() - self._press_pos
                 ).manhattanLength()
+            resizing = bool(self._resize_edge)
             self._drag_offset = None
             self._press_pos = None
-            if not self._dragging and moved < CLICK_THRESHOLD:
+            self._resize_edge = ""
+            self._resize_start_geo = None
+            self._resize_start_global = None
+            if not resizing and not self._dragging and moved < CLICK_THRESHOLD:
                 self.dashboard_requested.emit()
             self._dragging = False
-            # After a drag/click, re-arm auto-hide if enabled and the cursor is
-            # no longer over the widget.
-            if self._hide_on_idle and not self._cursor_inside():
-                self._idle_hide_timer.start()
+            # Refresh idle baseline after any interaction.
+            if self._hide_on_idle:
+                self._last_active = time.time()
         super().mouseReleaseEvent(event)
 
     def contextMenuEvent(self, event) -> None:
@@ -691,31 +751,6 @@ class DesktopWidget(QWidget):
         hide_idle.setChecked(self._hide_on_idle)
         hide_idle.toggled.connect(self.hide_on_idle_changed)
 
-        # Scale submenu with a slider 50-150%.
-        scale_menu = menu.addMenu("Масштаб")
-        slider = QSlider(Qt.Horizontal)
-        slider.setMinimum(int(MIN_SCALE * 100))
-        slider.setMaximum(int(MAX_SCALE * 100))
-        slider.setValue(int(self._scale * 100))
-        slider.setTickInterval(10)
-        slider.setTickPosition(QSlider.TicksBelow)
-        pct_label = QLabel(f"{int(self._scale * 100)}%")
-        slider.valueChanged.connect(
-            lambda v: pct_label.setText(f"{v}%")
-        )
-        slider.sliderReleased.connect(
-            lambda: self.set_scale(slider.value() / 100.0)
-        )
-        scale_row = QHBoxLayout()
-        scale_row.setContentsMargins(8, 6, 8, 6)
-        scale_row.addWidget(slider)
-        scale_row.addWidget(pct_label)
-        scale_widget = QWidget(scale_menu)
-        scale_widget.setLayout(scale_row)
-        scale_action = QWidgetAction(scale_menu)
-        scale_action.setDefaultWidget(scale_widget)
-        scale_menu.addAction(scale_action)
-
         check_updates = QAction("Проверить обновления…", menu)
         check_updates.triggered.connect(self.check_updates_requested)
         hide = QAction("Скрыть виджет (остаётся в трее)", menu)
@@ -724,7 +759,6 @@ class DesktopWidget(QWidget):
         quit_action.triggered.connect(self.quit_requested)
         menu.addAction(refresh)
         menu.addAction(mini)
-        menu.addAction(scale_menu.menuAction())
         menu.addAction(settings)
         menu.addAction(help_action)
         menu.addAction(hide_idle)
@@ -732,25 +766,21 @@ class DesktopWidget(QWidget):
         menu.addAction(hide)
         menu.addSeparator()
         menu.addAction(quit_action)
-        self._idle_hide_timer.stop()
-        menu.aboutToHide.connect(self._maybe_restart_idle_timer)
+        if self._hide_on_idle:
+            self._last_active = time.time()
         self._context_menu = menu
         menu.popup(event.globalPos())
 
-    def _maybe_restart_idle_timer(self) -> None:
-        if self._hide_on_idle and not self._hidden:
-            self._idle_hide_timer.start()
-
-    # ---- hover: drives only the auto-hide timer -------------------------
+    # ---- hover: drives only the auto-hide baseline ----------------------
     def enterEvent(self, event) -> None:
-        self._idle_hide_timer.stop()
+        # Mark active immediately so the poller won't hide on a stray leave.
+        self._last_active = time.time()
         if self._hidden:
             self._slide_in()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
-        if self._hide_on_idle:
-            self._idle_hide_timer.start()
+        # The poller (not this event) decides when to hide; just note the time.
         super().leaveEvent(event)
 
     # ---- geometry persistence -------------------------------------------
@@ -767,5 +797,5 @@ class DesktopWidget(QWidget):
         super().resizeEvent(event)
 
     def hideEvent(self, event) -> None:
-        self._idle_hide_timer.stop()
+        self._idle_check_timer.stop()
         super().hideEvent(event)

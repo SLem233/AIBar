@@ -1,12 +1,17 @@
-"""Auto-hide (v0.6.0 model).
+"""Auto-hide (polling-based model).
 
 The widget slides behind the nearest screen edge, leaving ~15% of its frame as
-a "bookmark" tab; hovering it slides it back and docks it flush to the edge.
-The widget does NOT change size or color — only its on-screen position.
+a "bookmark" tab; bringing the cursor over that tab slides it back and docks it
+flush to the edge. The widget does NOT change size or color — only its on-screen
+position. A polling timer checks the real cursor position (enter/leave events
+on a translucent frameless window are unreliable) and drives the transitions.
 """
+
+import time
 
 import pytest
 from PySide6.QtCore import QAbstractAnimation, QRect
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication
 
 from aibar.providers.base import ProviderSnapshot, RateWindow
@@ -32,23 +37,21 @@ def _stub_screen(widget, rect):
 SCREEN = QRect(0, 0, 1920, 1080)
 
 
-def test_hide_on_idle_setter_armed_when_cursor_off(app):
+def test_hide_on_idle_setter_starts_poller(app):
     widget = DesktopWidget()
     _stub_screen(widget, SCREEN)
-    # Park the widget where the offscreen cursor (0,0) is clearly outside it.
     widget.move(1000, 1000)
     widget.show()
     assert widget._hide_on_idle is False
     widget.set_hide_on_idle(True)
     assert widget._hide_on_idle is True
-    assert widget._idle_hide_timer.isActive()  # cursor off -> armed
+    assert widget._idle_check_timer.isActive()  # poller armed
     widget.set_hide_on_idle(False)
-    assert not widget._idle_hide_timer.isActive()
+    assert not widget._idle_check_timer.isActive()
 
 
 def test_slide_off_refuses_while_cursor_inside(app):
     """Hide must not fire while the cursor is genuinely over the widget."""
-    from PySide6.QtGui import QCursor
     widget = DesktopWidget()
     _stub_screen(widget, SCREEN)
     widget.move(100, 100)
@@ -58,7 +61,6 @@ def test_slide_off_refuses_while_cursor_inside(app):
     widget._hide_on_idle = True
     widget._slide_off()
     assert widget._hidden is False  # refused because cursor is inside
-    # Restore the cursor so it doesn't leak into subsequent tests.
     QCursor.setPos(0, 0)
 
 
@@ -117,7 +119,6 @@ def test_slide_in_docks_flush_to_anchor_edge(app):
     assert target.y() == SCREEN.top()
 
 
-
 def test_slide_off_noop_when_disabled(app):
     widget = DesktopWidget()
     _stub_screen(widget, SCREEN)
@@ -127,6 +128,48 @@ def test_slide_off_noop_when_disabled(app):
     widget._slide_off()
     assert widget._hidden is False
     assert widget.pos() == before
+
+
+def test_idle_check_hides_when_cursor_off_after_delay(app):
+    """The poller fires _slide_off once the cursor is off and the delay elapsed."""
+    widget = DesktopWidget()
+    _stub_screen(widget, SCREEN)
+    widget.move(100, 50)
+    widget.show()
+    QCursor.setPos(0, 0)  # cursor clearly outside the widget
+    widget.set_hide_on_idle(True)
+    # Pretend the delay already elapsed -> poller should hide.
+    widget._last_active = time.time() - 10
+    widget._on_idle_check()
+    assert widget._hidden is True
+
+
+def test_idle_check_keeps_visible_when_cursor_inside(app):
+    """The poller must not hide while the cursor is over the widget."""
+    widget = DesktopWidget()
+    _stub_screen(widget, SCREEN)
+    widget.move(100, 100)
+    widget.show()
+    QCursor.setPos(160, 230)  # cursor inside the widget
+    widget.set_hide_on_idle(True)
+    widget._last_active = time.time() - 10  # delay well past
+    widget._on_idle_check()
+    assert widget._hidden is False
+    QCursor.setPos(0, 0)
+
+
+def test_idle_check_slides_in_when_cursor_returns(app):
+    widget = DesktopWidget()
+    _stub_screen(widget, SCREEN)
+    widget.move(100, 50)
+    widget.show()
+    widget.set_hide_on_idle(True)
+    widget._slide_off()
+    assert widget._hidden is True
+    QCursor.setPos(widget.geometry().center().x(), widget.geometry().center().y())
+    widget._on_idle_check()
+    assert widget._hidden is False
+    QCursor.setPos(0, 0)
 
 
 def test_nearest_edge_by_distance_mid_screen(app):
