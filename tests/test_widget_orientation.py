@@ -132,3 +132,29 @@ def test_dock_to_edge_flush(app):
     assert widget.pos().x() == SCREEN.left()
     widget._dock_to_edge("right")
     assert widget.pos().x() == SCREEN.right() - widget.width() + 1
+
+
+def test_stale_tiny_geometry_grows_to_readable_size(app):
+    """A tiny frame saved from a prior run must grow so each gauge is readable.
+
+    Regression: with 3 providers in a 136px-tall frame, each gauge got ~24px
+    and the rings were nearly invisible (Z.ai limits not seen).
+    """
+    widget = DesktopWidget()
+    _stub_screen(widget, SCREEN)
+    widget.resize(306, 136)  # stale tiny geometry
+    snaps = [
+        ProviderSnapshot(provider="Claude", windows=[RateWindow("Сессия", 0.0)]),
+        ProviderSnapshot(provider="Codex", windows=[RateWindow("Неделя", 100.0)]),
+        ProviderSnapshot(provider="Z.ai", windows=[RateWindow("Сессия", 24.0)]),
+    ]
+    widget.update_snapshots(snaps)
+    # Each tile now has a gauge tall enough to draw readable rings.
+    for name, tile in widget._tiles.items():
+        assert tile.gauge.height() >= 40, f"{name} gauge too small: {tile.gauge.height()}"
+    # Normalization only happens once; a later poll must not resize again.
+    h_after = widget.height()
+    widget._size_normalized = True
+    widget.update_snapshots(snaps)
+    assert widget.height() == h_after
+

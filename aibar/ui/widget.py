@@ -69,8 +69,8 @@ HIDE_POLL_MS_FAST = 120
 CLICK_THRESHOLD = 4
 # Resize hit-test margin (px from each edge) and minimum frame size.
 RESIZE_MARGIN = 8
-MIN_W = 80
-MIN_H = 80
+MIN_W = 90
+MIN_H = 90
 DEFAULT_W = 120
 DEFAULT_H = 260
 
@@ -246,6 +246,9 @@ class DesktopWidget(QWidget):
         self._snapshots: list[ProviderSnapshot] = []
         self._mode = "full"  # full | mini
         self._mini_threshold = 70.0
+        # Set True after the first on-size readable-size normalization, so we
+        # don't keep overriding a deliberately small frame on every poll.
+        self._size_normalized = False
         # (timestamp, {provider: summed window percents}) for the last 15 min
         self._activity: list[tuple[float, dict[str, float]]] = []
         self._last_solo: str | None = None
@@ -360,6 +363,12 @@ class DesktopWidget(QWidget):
         self.vpn_badge.setVisible(any(s.paused for s in snapshots))
         self._record_activity(snapshots)
         self._apply_visibility()
+        # Once: grow the frame if it's too small to show readable gauges for
+        # the tile count (e.g. a stale tiny geometry from a prior run). After
+        # that the user's chosen size is respected.
+        if not self._size_normalized:
+            self._ensure_readable_size()
+            self._size_normalized = True
 
     def _active_tiles_layout(self):
         return self.tiles_hbox if self._horizontal else self.tiles_vbox
@@ -373,6 +382,8 @@ class DesktopWidget(QWidget):
         self._tiles.clear()
         self._activity.clear()
         self._last_solo = None
+        # Re-allow size normalization for the new provider set.
+        self._size_normalized = False
 
     def set_update_available(self, version: str) -> None:
         self.update_badge.show_version(version)
@@ -576,15 +587,32 @@ class DesktopWidget(QWidget):
         self._hidden = False
 
     def ensure_visible(self) -> None:
-        """Force the widget fully on-screen and not hidden (call at startup).
+        """Force the widget fully on-screen, sized readably, and not hidden.
 
-        Guards against a stale partially-hidden geometry left from a prior run.
+        Guards against a stale partially-hidden geometry left from a prior run
+        (e.g. a tiny frame saved while testing), which left the gauges
+        rendering at near-zero height. Enforces sensible minimums so every
+        visible tile has enough room for a readable gauge.
         """
         self._stop_slide_anim()
         self._hidden = False
         self._hidden_anchor = None
+        self._ensure_readable_size()
         # If the stored position is off-screen, pull it back inside.
         self.move(self._clamp_to_screen(self.pos()))
+
+    def _ensure_readable_size(self) -> None:
+        """Grow the frame (never shrink) so every visible tile gets a readable
+        gauge. Called at startup and after the first poll when tiles exist."""
+        new_w = max(self.width(), MIN_W)
+        new_h = max(self.height(), MIN_H)
+        n = max(1, len(self._visible_providers()) or 1)
+        if not self._horizontal:
+            new_h = max(new_h, 28 + n * 64)
+        else:
+            new_w = max(new_w, 28 + n * 64)
+        if (new_w, new_h) != (self.width(), self.height()):
+            self.resize(new_w, new_h)
 
     # ---- mini mode -------------------------------------------------------
     def set_mode(self, mode: str) -> None:
