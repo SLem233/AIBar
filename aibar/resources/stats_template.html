@@ -422,6 +422,7 @@ function render() {
   const outliers = Object.entries(c.outMap).sort((a, b) => b[1].act - a[1].act).slice(0, 10);
   // напоминание о ретроспективе — по всем проектам, не по выбранному периоду
   const retro = RAW.retro || [];
+  const review = RAW.review || [];
   const upd = new Date(new Date(c.maxTs).getTime() + MSK).toISOString().slice(0, 16).replace('T', ' ') + ' МСК';
 
   body.innerHTML = `
@@ -561,6 +562,11 @@ function render() {
       <h2 class="sec" style="margin-bottom:var(--space-2);">Материал для ретроспективы</h2>
       <p style="font-size:14.5px;color:var(--color-neutral-700);margin:0 0 var(--space-4);max-width:70ch;">В этих проектах есть сессии новее последней ретроспективы — «Инсайты» и «Паттерны» в карточках отстали. Пополнить: <span class="mono" style="font-size:13.5px;">/session-retrospective</span> (статус проекта — <span class="mono" style="font-size:13.5px;">/project-status</span>).</p>
       ${retro.map(r => `<div class="krow"><div>${projName(r.project)}</div><div class="r tnum">последняя сессия ${fmtDay(r.last_ts)} · ретроспектива ${r.since ? fmtDay(r.since) : 'не проводилась'}</div></div>`).join('')}
+    </section>` : ''}
+    ${review.length ? `<div class="hr"></div><section>
+      <h2 class="sec" style="margin-bottom:var(--space-2);">Обзор карточек отстал</h2>
+      <p style="font-size:14.5px;color:var(--color-neutral-700);margin:0 0 var(--space-4);max-width:70ch;">У этих карточек «Инсайты» или «Паттерны» изменились после последнего обзора — сводка <span class="mono" style="font-size:13.5px;">_cards-review.md</span> устарела. Пересобрать: <span class="mono" style="font-size:13.5px;">/cards-review</span>.</p>
+      <div class="krow"><div>${review.map(n => projName(n)).join(', ')}</div><div class="r tnum">${review.length} карт.</div></div>
     </section>` : ''}
     <footer class="bot tnum"><div>Источник: ${esc(RAW.source || '—')} · сгенерировано AIBar ${esc(RAW.generated_at || '')}</div><div>Последнее событие ${upd}</div></footer>
   `;

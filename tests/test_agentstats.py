@@ -293,3 +293,81 @@ def test_generated_data_roundtrips(ledger, tmp_path):
     end = text.index(";\n", start)
     data = json.loads(text[start:end].replace("<\\/", "</"))
     assert {s["session_id"] for s in data["sessions"]} == {"s1", "s2", "s1:agent-a1"}
+
+
+CARD_WITH_SECTIONS = """---
+project: Alpha
+---
+
+# Alpha
+
+<!-- AUTO-BEGIN: обновляется AgentPulse, не править вручную -->
+| Активное время | {act} |
+<!-- AUTO-END -->
+
+## Инсайты
+
+{ins}
+
+## Паттерны для скиллов/хуков
+
+- паттерн → скилл
+"""
+
+
+def write_card(cards, name, *, ins="- инсайт", act="1 ч"):
+    (cards / f"{name}.md").write_text(
+        CARD_WITH_SECTIONS.format(ins=ins, act=act), encoding="utf-8"
+    )
+
+
+def add_review_mark(db_path, state):
+    """Отметка о проведённом обзоре карточек, как её пишет AgentPulse."""
+    db = sqlite3.connect(db_path)
+    db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    db.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('cards_review_done', ?)",
+        (json.dumps(state, ensure_ascii=False, sort_keys=True),),
+    )
+    db.commit()
+    db.close()
+
+
+def test_review_lists_cards_never_reviewed(ledger, vault):
+    write_card(vault, "Alpha")
+    data = agentstats.load_data(ledger, cards_dir=vault)
+    assert data["review"] == ["Alpha"]
+
+
+def test_review_empty_when_mark_matches(ledger, vault):
+    write_card(vault, "Alpha")
+    add_review_mark(ledger, agentstats.cards_state(vault))
+    data = agentstats.load_data(ledger, cards_dir=vault)
+    assert data["review"] == []
+
+
+def test_review_reacts_to_sections_not_metrics(ledger, vault):
+    write_card(vault, "Alpha")
+    add_review_mark(ledger, agentstats.cards_state(vault))
+    write_card(vault, "Alpha", act="99 ч")  # метрики переписывает update — не повод
+    assert agentstats.load_data(ledger, cards_dir=vault)["review"] == []
+    write_card(vault, "Alpha", ins="- инсайт\n- новый инсайт")
+    assert agentstats.load_data(ledger, cards_dir=vault)["review"] == ["Alpha"]
+
+
+def test_review_skips_cards_without_sections(ledger, vault):
+    # фикстурная AIBar.md накопительных секций не имеет — обзору её нечего дать
+    assert agentstats.load_data(ledger, cards_dir=vault)["review"] == []
+
+
+def test_review_without_cards_dir(ledger):
+    assert agentstats.load_data(ledger)["review"] == []
+
+
+def test_stats_page_renders_review_block(ledger, vault, tmp_path):
+    write_card(vault, "Alpha")
+    out = tmp_path / "stats.html"
+    agentstats.generate(ledger, out, cards_dir=vault)
+    text = out.read_text(encoding="utf-8")
+    assert "RAW.review" in text
+    assert "/cards-review" in text

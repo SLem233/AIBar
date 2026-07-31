@@ -6,6 +6,7 @@ generation time, so the browser needs no server, no CDN and no network.
 Aggregation formulas live in the template's JS and mirror AgentPulse 1:1.
 """
 
+import hashlib
 import html
 import json
 import re
@@ -180,6 +181,55 @@ def _retro_pending(sessions: list[dict], marks: dict[str, str]) -> list[dict]:
     return sorted(pending, key=lambda r: r["last_ts"], reverse=True)
 
 
+# Отметка обзора карточек: одним JSON {карточка: хеш накопительных секций}.
+_REVIEW_SQL = "SELECT value FROM meta WHERE key='cards_review_done'"
+#: Секции, которые сводит /cards-review. Держать в согласии с `agentpulse.cards_review`.
+_REVIEW_SECTIONS = ("Инсайты", "Паттерны для скиллов/хуков")
+
+
+def _sections_hash(text: str) -> str:
+    """Хеш накопительных секций карточки.
+
+    Повторяет правило AgentPulse: метрики и frontmatter не участвуют, иначе
+    напоминание срабатывало бы после каждого `agentpulse update`.
+    """
+    parts = []
+    for name in _REVIEW_SECTIONS:
+        m = re.search(rf"^## {re.escape(name)}\s*$(.*?)(?=^## |\Z)", text, re.M | re.S)
+        parts.append((m.group(1) if m else "").strip())
+    return hashlib.sha1("\n\n".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+_EMPTY_SECTIONS = _sections_hash("")
+
+
+def cards_state(cards_dir: Path | str | None) -> dict[str, str]:
+    """{карточка: хеш секций} — то же состояние, что пишет `agentpulse cards-review --mark`."""
+    cards_dir = Path(cards_dir) if cards_dir else None
+    if cards_dir is None or not cards_dir.is_dir():
+        return {}
+    return {
+        p.stem: _sections_hash(p.read_text(encoding="utf-8", errors="replace"))
+        for p in sorted(cards_dir.glob("*.md"))
+        if not p.name.startswith("_")
+    }
+
+
+def _review_pending(cards_dir: Path | str | None, mark: str) -> list[str]:
+    """Карточки, чьи накопительные секции изменились после последнего обзора."""
+    try:
+        marks = json.loads(mark) if mark else {}
+    except ValueError:
+        marks = {}  # битая отметка — считаем, что обзора не было
+    if not isinstance(marks, dict):
+        marks = {}
+    return sorted(
+        name
+        for name, h in cards_state(cards_dir).items()
+        if h != _EMPTY_SECTIONS and marks.get(name) != h
+    )
+
+
 def load_data(
     db_path: Path | str,
     cards_dir: Path | str | None = None,
@@ -218,6 +268,11 @@ def load_data(
             }
         except sqlite3.Error:
             marks = {}  # ретроспектив ещё не было — напомним про все проекты
+        try:
+            row = con.execute(_REVIEW_SQL).fetchone()
+            review_mark = row["value"] if row else ""
+        except sqlite3.Error:
+            review_mark = ""  # обзора карточек ещё не было
     finally:
         con.close()
     projects = {s["project"] for s in sessions if s["project"]}
@@ -227,6 +282,7 @@ def load_data(
         "daily_models": daily_models,
         "daily_tools": daily_tools,
         "retro": _retro_pending(sessions, marks),
+        "review": _review_pending(cards_dir, review_mark),
         "cards": _card_links(projects, Path(cards_dir) if cards_dir else None),
         # Сессии «вне реестра» старше этой отметки помечены как «не для
         # анализа» и в одноимённый список не попадают (обнуление 23.07.2026)
