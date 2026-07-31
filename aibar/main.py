@@ -111,6 +111,9 @@ class AIBarApp:
         else:
             screen = app.primaryScreen().availableGeometry()
             self.widget.move(screen.right() - self.widget.width() - 16, screen.top() + 60)
+        # сворачивание включаем после геометрии — от уже занятого места
+        self.widget.autohide_changed.connect(self.set_widget_autohide)
+        self.widget.set_autohide(bool(self.cfg.get("widget_autohide", False)))
         if self.cfg.get("widget_enabled", True):
             self.widget.show()
 
@@ -199,6 +202,11 @@ class AIBarApp:
         self.cfg["widget_mode"] = mode
         config.save(self.cfg)
         self.widget.set_mode(mode)
+
+    def set_widget_autohide(self, enabled: bool) -> None:
+        self.cfg["widget_autohide"] = enabled
+        config.save(self.cfg)
+        self.widget.set_autohide(enabled)
 
     def set_widget_enabled(self, enabled: bool) -> None:
         self.cfg["widget_enabled"] = enabled
