@@ -1,14 +1,15 @@
 """Always-on-top desktop widget: a column of per-provider radial gauges.
 
 Draggable anywhere, resizable via the bottom-right grip; hovering shows a
-panel with the full per-provider breakdown next to the widget.
+panel with the full per-provider breakdown next to the widget. Прижатый к краю
+экрана виджет умеет сворачиваться туда за ненадобностью — см. edge_collapse.
 """
 
 import time
 from datetime import datetime
 
-from PySide6.QtCore import QPoint, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QPainter
+from PySide6.QtCore import QPoint, Qt, QTimer, Signal
+from PySide6.QtGui import QAction, QColor, QCursor, QPainter
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -20,78 +21,15 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__, theme
-from ..geoblock import PAUSED_MESSAGE
 from ..providers.base import ProviderSnapshot
-from ..update import RELEASES_URL
+from .badges import UpdateBadge, VpnBadge
 from .dashboard import ProviderCard
+from .edge_collapse import EdgeCollapse
 from .gauge import RadialGauge
 
 WIDGET_FLAGS = Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
 
-
-class UpdateBadge(QLabel):
-    """Clickable pill shown when a newer release is published."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAlignment(Qt.AlignCenter)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet(
-            f"""
-            background: rgba(250, 178, 25, 38);
-            color: {theme.WARNING};
-            border: 1px solid {theme.WARNING};
-            border-radius: 7px;
-            padding: 2px 6px;
-            font-family: "{theme.FONT_FAMILY}";
-            font-size: 10px;
-            font-weight: 600;
-            """
-        )
-        self.hide()
-
-    def show_version(self, version: str) -> None:
-        self._version = version
-        self._relabel()
-        self.show()
-
-    def _relabel(self) -> None:
-        wide = self.parentWidget() is None or self.parentWidget().width() >= 90
-        self.setText("↓ Update available" if wide else "↓ Update")
-        self.setToolTip(
-            f"Доступна версия {getattr(self, '_version', '')} — нажмите, чтобы открыть страницу загрузки"
-        )
-
-    def relabel_for_width(self) -> None:
-        if self.isVisible():
-            self._relabel()
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.LeftButton:
-            QDesktopServices.openUrl(QUrl(RELEASES_URL))
-        super().mousePressEvent(event)
-
-
-class VpnBadge(QLabel):
-    """Pill shown while polling is paused because the VPN is off."""
-
-    def __init__(self, parent=None):
-        super().__init__("⏸ нет VPN", parent)
-        self.setAlignment(Qt.AlignCenter)
-        self.setToolTip(PAUSED_MESSAGE)
-        self.setStyleSheet(
-            f"""
-            background: rgba(250, 178, 25, 38);
-            color: {theme.WARNING};
-            border: 1px solid {theme.WARNING};
-            border-radius: 7px;
-            padding: 2px 6px;
-            font-family: "{theme.FONT_FAMILY}";
-            font-size: 10px;
-            font-weight: 600;
-            """
-        )
-        self.hide()
+__all__ = ["DesktopWidget", "GaugeTile", "HoverPanel", "UpdateBadge", "VpnBadge"]
 
 
 class HoverPanel(QWidget):
@@ -228,6 +166,7 @@ class DesktopWidget(QWidget):
     hide_requested = Signal()
     quit_requested = Signal()
     mode_changed = Signal(str)  # "full" | "mini"
+    autohide_changed = Signal(bool)  # сворачивать ли виджет у края экрана
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -276,6 +215,11 @@ class DesktopWidget(QWidget):
         self._geometry_timer.setInterval(800)
         self._geometry_timer.timeout.connect(self.geometry_changed)
 
+        # Сворачивание за край экрана (по умолчанию выключено)
+        self.collapse = EdgeCollapse(self, keep_open=self._panel_holds_cursor)
+        self.collapse.collapsed.connect(self._on_collapsed)
+        self.collapse.expanded.connect(self._on_expanded)
+
     # ---- data -----------------------------------------------------------
     def update_snapshots(self, snapshots: list[ProviderSnapshot]) -> None:
         for snap in snapshots:
@@ -304,10 +248,36 @@ class DesktopWidget(QWidget):
     def set_update_available(self, version: str) -> None:
         self.update_badge.show_version(version)
 
+    # ---- сворачивание за край -------------------------------------------
+    def set_autohide(self, enabled: bool) -> None:
+        self.collapse.set_enabled(enabled)
+
+    def _panel_holds_cursor(self) -> bool:
+        """Курсор на ховер-панели — виджет ещё нужен, сворачивание откладываем."""
+        return self.panel.isVisible() and self.panel.frameGeometry().contains(
+            QCursor.pos()
+        )
+
+    def _begin_interaction(self) -> None:
+        """Клик/перетаскивание: развернуть свёрнутый виджет и отложить сворачивание."""
+        self.collapse.expand(animated=False)
+        self.collapse.notify_activity()
+
+    def _on_collapsed(self) -> None:
+        self._hide_timer.stop()
+        self.panel.hide()
+
+    def _on_expanded(self) -> None:
+        # вернулись под курсор — показываем панель, как при обычном наведении
+        if self.frameGeometry().contains(QCursor.pos()):
+            self._reposition_panel()
+            self.panel.show()
+
     # ---- mini mode -------------------------------------------------------
     def set_mode(self, mode: str) -> None:
         self._mode = mode if mode in ("full", "mini") else "full"
         self._apply_visibility()
+        self.collapse.refresh()  # размер кадра мог поменяться — полоска та же
 
     def set_mini_threshold(self, percent: float) -> None:
         self._mini_threshold = percent
@@ -373,6 +343,8 @@ class DesktopWidget(QWidget):
     # ---- drag to move ---------------------------------------------------
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
+            # схватили за полоску свёрнутого виджета — сначала вернуть его
+            self._begin_interaction()
             self._drag_offset = (
                 event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             )
@@ -382,10 +354,12 @@ class DesktopWidget(QWidget):
         if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
             self.move(event.globalPosition().toPoint() - self._drag_offset)
             self._reposition_panel()
+            self.collapse.notify_activity()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         self._drag_offset = None
+        self.collapse.notify_activity()
         super().mouseReleaseEvent(event)
 
     def contextMenuEvent(self, event) -> None:
@@ -401,6 +375,12 @@ class DesktopWidget(QWidget):
         mini.toggled.connect(
             lambda on: self.mode_changed.emit("mini" if on else "full")
         )
+        autohide = QAction("Сворачивать у края экрана", menu, checkable=True)
+        autohide.setChecked(self.collapse.enabled)
+        autohide.setToolTip(
+            "Прижатый к краю виджет уезжает за край, оставляя тонкую полоску"
+        )
+        autohide.toggled.connect(self.autohide_changed)
         stats = QAction("Статистика", menu)
         stats.triggered.connect(self.stats_requested)
         settings = QAction("Настройки…", menu)
@@ -413,6 +393,7 @@ class DesktopWidget(QWidget):
         quit_action.triggered.connect(self.quit_requested)
         menu.addAction(refresh)
         menu.addAction(mini)
+        menu.addAction(autohide)
         menu.addAction(stats)
         menu.addAction(settings)
         menu.addAction(help_action)
@@ -420,13 +401,17 @@ class DesktopWidget(QWidget):
         menu.addSeparator()
         menu.addAction(quit_action)
         self._context_menu = menu  # keep alive: popup() is non-blocking
+        self.collapse.notify_activity()
         menu.popup(event.globalPos())
 
     # ---- hover panel ----------------------------------------------------
     def enterEvent(self, event) -> None:
-        self._hide_timer.stop()
-        self._reposition_panel()
-        self.panel.show()
+        self.collapse.notify_activity()
+        # свёрнутый виджет сначала выезжает обратно — панель ждёт до этого
+        if not self.collapse.is_collapsed:
+            self._hide_timer.stop()
+            self._reposition_panel()
+            self.panel.show()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
@@ -452,14 +437,18 @@ class DesktopWidget(QWidget):
 
     # ---- geometry persistence -------------------------------------------
     def moveEvent(self, event) -> None:
-        self._geometry_timer.start()
+        # позиции свёрнутого виджета временные — храним «жилую», у края
+        if not self.collapse.busy:
+            self._geometry_timer.start()
         super().moveEvent(event)
 
     def resizeEvent(self, event) -> None:
         self._geometry_timer.start()
         self.update_badge.relabel_for_width()
+        self.collapse.refresh()  # другой размер кадра — та же полоска у края
         super().resizeEvent(event)
 
     def hideEvent(self, event) -> None:
         self.panel.hide()
+        self.collapse.expand(animated=False)  # прятать/показывать целиком
         super().hideEvent(event)
