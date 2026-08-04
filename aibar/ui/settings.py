@@ -128,12 +128,16 @@ class SettingsDialog(QDialog):
         self.tavily_key = QLineEdit(cfg.get("tavily_api_key") or "")
         self.tavily_key.setEchoMode(QLineEdit.Password)
         self.tavily_key.setPlaceholderText("tvly-…")
+        self.grok_key = QLineEdit(cfg.get("grok_api_key") or "")
+        self.grok_key.setEchoMode(QLineEdit.Password)
+        self.grok_key.setPlaceholderText("xai-… (опц. — OAuth из grok CLI предпочтительнее)")
         form.addRow("Z.ai API-ключ:", self.zai_key)
         form.addRow("Z.ai регион:", self.zai_region)
         form.addRow("OpenCode cookie:", self.opencode_cookie)
         form.addRow("OpenCode workspace:", self.opencode_workspace)
         form.addRow("OpenAI Admin-ключ:", self.openai_key)
         form.addRow("Tavily API-ключ:", self.tavily_key)
+        form.addRow("Grok (xAI) API-ключ:", self.grok_key)
         return page
 
     def _billing_tab(self, cfg: dict) -> QWidget:
@@ -165,6 +169,7 @@ class SettingsDialog(QDialog):
         form.addRow("Claude: продление:", renewal_row("claude"))
         form.addRow("Cursor: продление:", renewal_row("cursor"))
         form.addRow("Z.ai: продление:", renewal_row("zai"))
+        form.addRow("Grok: продление:", renewal_row("grok"))
         form.addRow("Tavily: продление:", renewal_row("tavily"))
 
         self.openai_budget = QSpinBox()
@@ -173,6 +178,17 @@ class SettingsDialog(QDialog):
         self.openai_budget.setSpecialValueText("не задан (только расход)")
         self.openai_budget.setValue(int(cfg.get("openai_budget_usd") or 0))
         form.addRow("OpenAI бюджет/мес:", self.openai_budget)
+
+        self.grok_budget = QSpinBox()
+        self.grok_budget.setRange(0, 100000)
+        self.grok_budget.setPrefix("$ ")
+        self.grok_budget.setSpecialValueText("не задан")
+        self.grok_budget.setValue(int(cfg.get("grok_budget_usd") or 0))
+        self.grok_budget.setToolTip(
+            "Только для режима API-ключа XAI. При OAuth-подписке лимит "
+            "берётся из аккаунта автоматически."
+        )
+        form.addRow("Grok бюджет/мес:", self.grok_budget)
 
         self.openai_balance = QDoubleSpinBox()
         self.openai_balance.setRange(0, 1000000)
@@ -210,10 +226,12 @@ class SettingsDialog(QDialog):
         cfg["opencode_workspace"] = self.opencode_workspace.text().strip()
         cfg["openai_admin_key"] = self.openai_key.text().strip()
         cfg["openai_budget_usd"] = self.openai_budget.value()
+        cfg["grok_budget_usd"] = self.grok_budget.value()
         cfg["openai_balance_usd"] = self.openai_balance.value()
         cfg["openai_balance_date"] = self.openai_balance_date_edit.text().strip()
         cfg["tavily_api_key"] = self.tavily_key.text().strip()
-        for prefix in ("claude", "cursor", "zai", "tavily"):
+        cfg["grok_api_key"] = self.grok_key.text().strip()
+        for prefix in ("claude", "cursor", "zai", "grok", "tavily"):
             cfg[f"{prefix}_renewal_date"] = getattr(self, f"{prefix}_renewal_date").text().strip()
             cfg[f"{prefix}_renewal_period"] = getattr(self, f"{prefix}_renewal_period").currentData()
         cfg["refresh_seconds"] = self.interval.value() * 60

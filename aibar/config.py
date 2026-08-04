@@ -26,6 +26,8 @@ DEFAULTS = {
     "openai_balance_usd": 0,
     "openai_balance_date": "",
     "tavily_api_key": "",
+    "grok_api_key": "",  # optional fallback (console.x.ai) — OAuth preferred
+    "grok_budget_usd": 0,  # only used in API-key fallback mode
     # Renewal date (dd.mm.yyyy) + cycle for providers whose APIs expose no
     # billing anchor; empty date = don't show. Past dates roll forward.
     "claude_renewal_date": "",
@@ -36,6 +38,8 @@ DEFAULTS = {
     "zai_renewal_period": "month",
     "tavily_renewal_date": "",
     "tavily_renewal_period": "month",
+    "grok_renewal_date": "",
+    "grok_renewal_period": "month",
 }
 
 
