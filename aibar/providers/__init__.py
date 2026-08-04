@@ -21,7 +21,7 @@ PROVIDER_HINTS = {
     "Codex": "токен codex CLI (~/.codex)",
     "Cursor": "сессия приложения Cursor",
     "Z.ai": "API-ключ coding-плана (zcode)",
-    "Grok": "OAuth grok CLI (~/.grok): недельные лимиты подписки",
+    "Grok": "OAuth grok CLI (~/.grok): списание подписки (месячный prepaid)",
     "OpenCode": "cookie с opencode.ai",
     "Google": "квоты Gemini (вход gemini CLI, ~/.gemini)",
     "OpenAI API": "Admin-ключ: расход и остаток",

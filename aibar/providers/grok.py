@@ -1,44 +1,79 @@
-"""Grok (xAI) usage provider — subscription rate limits via chat headers.
+"""Grok (xAI) usage provider — subscription billing window.
 
-The Grok CLI ``/usage`` command shows WEEKLY rate limits as percentages. Those
-limits are returned in ``x-ratelimit-*`` response headers on chat completions
-requests — there is no dedicated usage endpoint. So this provider makes one
-minimal chat request (1 token) to ``cli-chat-proxy.grok.com`` and reads the
-headers:
+Sources researched for the Grok weekly limit ("Weekly limit: Next reset: …")
+shown by the Grok Build CLI ``/usage`` slash command inside the TUI:
 
-  x-ratelimit-limit-tokens      — weekly token quota
-  x-ratelimit-remaining-tokens  — tokens remaining in the window
-  x-ratelimit-limit-requests    — request quota (per-window)
-  x-ratelimit-remaining-requests
+  1. **No ``x-ratelimit-*`` headers on chat completions.** ``strings`` over
+     ``~/.grok/bin/grok.exe`` confirms the headers emitted by
+     ``cli-chat-proxy.grok.com`` are ``x-grok-*``/``x-xai-*`` only — there is no
+     *weekly-token* quota exposed through chat. Probing chat for rate-limit
+     headers returns ``0%`` because the headers are absent; that is what the
+     previous version of this provider did, and why it was wrong.
 
-The token quota is the one ``/usage`` reports as a percentage. We also fetch
-``/v1/billing`` for the monthly spend/budget (best-effort, shown as extra).
+  2. **The 43%/reset-10-Aug figures come from ``auth/check_subscription``** —
+     a JSON-RPC method sent over the WebSocket relay ``wss://code.grok.com/
+     ws/code-agent`` inside the TUI process (source: ``serialize check_subscription
+     params`` / ``x.ai/auth/check_subscription`` strings in the binary). This
+     relay rejects our bearer token with ``3000 Unauthorized`` externally — let
+     alone that ``cli-chat-proxy.grok.com`` is intermittently down (521/Cloudflare),
+     so we cannot reach ``check_subscription`` reliably from a pull script.
 
-OAuth token from ``~/.grok/auth.json`` (created by the Grok CLI at login) is
-auto-refreshed via OIDC (``auth.x.ai``), so no CLI session is needed after the
-first login. API-key fallback (console.x.ai) only supports the monthly budget.
+  3. **REST ``GET https://cli-chat-proxy.grok.com/v1/billing``** with the
+     Grok-CLI OAuth bearer succeeds (200) and returns::
+
+         {
+           "config": {
+             "monthlyLimit":  {"val": 20000},        # cents
+             "used":          {"val": 1974},
+             "onDemandCap":   {"val": 0},
+             "billingPeriodStart": "2026-08-01T00:00:00+00:00",
+             "billingPeriodEnd":   "2026-09-01T00:00:00+00:00",
+             "history": [...]
+           }
+         }
+
+For the user whose CLI reports ``Monthly limit: 10%`` ($19.74 of $200
+prepaid monthly credit), this REST call returns exactly that — and the
+``billingPeriodEnd`` drives the gauge's reset countdown. The *separate*
+``Weekly limit: 43%`` rolling-chat-tokens window lives behind the
+relay-lock gated by the TUI process; we surface it as a hint in the error
+string when billing is unavailable and otherwise let the gauge reflect the
+ billed monthly spend (the only authority we can poll headlessly).
+
+OAuth token from ``~/.grok/auth.json`` is auto-refreshed via OIDC
+(``auth.x.ai``), so no CLI session is needed after first login. API-key
+fallback (console.x.ai) only supports a manual monthly budget field.
 """
 
 import json
+from datetime import datetime, timezone, timedelta
 
 import requests
 
 from .base import (
     ProviderSnapshot,
     RateWindow,
+    looks_like_api_key,
     parse_iso8601,
     subscription_renewal,
 )
 
-CHAT_URL = "https://cli-chat-proxy.grok.com/v1/chat/completions"
 BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing"
 OIDC_DISCOVERY_URL = "https://auth.x.ai/.well-known/openid-configuration"
 # Public Grok CLI OAuth client_id.
 CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
-# Minimum CLI version the proxy accepts.
-CLI_VERSION = "0.1.202"
+# Minimum CLI version the proxy checked (mirrors the bundled binary's
+# x-grok-client-version so the relay accepts the bearer).
+CLI_VERSION = "0.2.118"
 TIMEOUT = 30
 AUTH_KEY_PREFIX = "https://auth.x.ai::"
+
+# Friendly hint when the relay is down or rejects our token. Kept in Russian
+# because the project is Russian-language UI (vas status push).
+RELAY_HINT = (
+    "Подписка-квоту (недельные окна) видно только внутри grok TUI — "
+    "откройте `grok` и нажмите /usage."
+)
 
 
 # ---- helpers --------------------------------------------------------------
@@ -70,16 +105,13 @@ def _token_expired(entry: dict) -> bool:
     dt = parse_iso8601(exp)
     if dt is None:
         return False
-    from datetime import datetime, timezone, timedelta
-
     return datetime.now(timezone.utc) >= dt - timedelta(seconds=120)
 
 
 def _discover_token_endpoint() -> str:
     resp = requests.get(OIDC_DISCOVERY_URL, timeout=TIMEOUT)
     resp.raise_for_status()
-    return (resp.json().get("token_endpoint")
-            or "https://auth.x.ai/oauth/token")
+    return (resp.json().get("token_endpoint") or "https://auth.x.ai/oauth/token")
 
 
 def _refresh_grok_token(path, entry: dict) -> str:
@@ -110,8 +142,6 @@ def _refresh_grok_token(path, entry: dict) -> str:
     if body.get("refresh_token"):
         entry["refresh_token"] = body["refresh_token"]
     if body.get("expires_in"):
-        from datetime import datetime, timezone, timedelta
-
         entry["expires_at"] = (
             datetime.now(timezone.utc) + timedelta(seconds=int(body["expires_in"]))
         ).isoformat()
@@ -129,10 +159,14 @@ def _refresh_grok_token(path, entry: dict) -> str:
     return body["access_token"]
 
 
-def _chat_headers(token: str) -> dict:
+def _billing_headers(token: str) -> dict:
+    """Headers the relay accepts for the billing endpoint.
+
+    The ``x-grok-*`` family mirrors what the bundled CLI sends; ``x-xai-token-auth``
+    must be ``xai-grok-cli`` (the relay rejects ``true`` with 401, observed live).
+    """
     return {
         "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
         "Accept": "application/json",
         "User-Agent": f"grok-cli/{CLI_VERSION}",
         "x-grok-client-version": CLI_VERSION,
@@ -141,59 +175,22 @@ def _chat_headers(token: str) -> dict:
     }
 
 
-def _probe_rate_limits(token: str) -> dict:
-    """Minimal chat request (1 token) to capture x-ratelimit-* headers.
-
-    Returns a dict with keys: limit_tokens, remaining_tokens, limit_requests,
-    remaining_requests (ints or None).
-    """
-    payload = {
-        "model": "grok-4",
-        "messages": [{"role": "user", "content": "1"}],
-        "max_tokens": 1,
-        "stream": False,
-    }
-    resp = requests.post(
-        CHAT_URL,
-        json=payload,
-        headers=_chat_headers(token),
-        timeout=TIMEOUT,
-    )
-    if resp.status_code != 200:
-        raise requests.HTTPError(response=resp)
-    h = resp.headers
-    out = {}
-    for field, header in (
-        ("limit_tokens", "x-ratelimit-limit-tokens"),
-        ("remaining_tokens", "x-ratelimit-remaining-tokens"),
-        ("limit_requests", "x-ratelimit-limit-requests"),
-        ("remaining_requests", "x-ratelimit-remaining-requests"),
-    ):
-        val = h.get(header)
-        if val is not None:
-            try:
-                out[field] = int(val)
-            except (TypeError, ValueError):
-                pass
-    return out
-
-
 def _fetch_billing(token: str) -> dict | None:
-    """Best-effort monthly spend/budget from /v1/billing (may 404 or fail)."""
+    """Best-effort fetch of /v1/billing. Returns the ``config`` sub-dict, or None."""
     try:
         resp = requests.get(
             BILLING_URL,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/json",
-            },
+            headers=_billing_headers(token),
             timeout=TIMEOUT,
         )
-        if resp.status_code == 200:
-            return resp.json()
     except requests.RequestException:
-        pass
-    return None
+        return None
+    if resp.status_code != 200 or not resp.content:
+        return None
+    try:
+        return resp.json().get("config") or None
+    except (ValueError, AttributeError):
+        return None
 
 
 def _api_key(cfg: dict | None) -> str | None:
@@ -205,6 +202,41 @@ def _api_key(cfg: dict | None) -> str | None:
         or os.environ.get("XAI_API_KEY", "").strip()
         or None
     )
+
+
+def _window_span_start_end(start_iso: str | None, end_iso: str | None) -> str:
+    """Human-readable label for the window based on its length: "Неделя" or "Мес."."""
+    if not start_iso or not end_iso:
+        return "Подписка"
+    start = parse_iso8601(start_iso)
+    end = parse_iso8601(end_iso)
+    if start is None or end is None:
+        return "Подписка"
+    days = (end - start).total_seconds() / 86400
+    if 6 <= days <= 8:
+        return "Неделя (списание)"
+    if 27 <= days <= 33:
+        return "Мес. (списание)"
+    return "Подписка"
+
+
+def _apply_billing(snap: ProviderSnapshot, config: dict) -> None:
+    """Turn the /v1/billing config block into the primary RateWindow."""
+    limit_raw = (config.get("monthlyLimit") or {}).get("val")
+    used_raw = (config.get("used") or {}).get("val")
+    period_end = config.get("billingPeriodEnd")
+    if limit_raw is None or used_raw is None or not limit_raw:
+        return
+    pct = min(100.0, used_raw / limit_raw * 100)
+    label = _window_span_start_end(config.get("billingPeriodStart"), period_end)
+    resets_at = parse_iso8601(period_end) if period_end else None
+    snap.windows.append(RateWindow(label, pct, resets_at=resets_at))
+    # Spent/limit as an extra line, in dollars (config values are cents).
+    snap.extra["Списание"] = f"${used_raw / 100:.2f} / ${limit_raw / 100:.2f}"
+    on_demand_cap = (config.get("onDemandCap") or {}).get("val")
+    if on_demand_cap:
+        # prepaid pay-as-you-go pool; show remaining.
+        snap.extra[" PAYG"] = f"${on_demand_cap / 100:.2f}"
 
 
 # ---- provider -------------------------------------------------------------
@@ -222,36 +254,33 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
             except (RuntimeError, requests.RequestException) as exc:
                 snap.error = f"{exc}"
                 return snap
-        try:
-            limits = _probe_rate_limits(token)
-        except requests.HTTPError as exc:
-            code = exc.response.status_code
-            if code in (401, 403):
-                # Try one refresh + retry.
-                try:
-                    token = _refresh_grok_token(path, entry)
-                    limits = _probe_rate_limits(token)
-                except (RuntimeError, requests.RequestException, requests.HTTPError) as e:
-                    snap.error = f"{e} — обновите вход: запустите grok CLI"
-                    return snap
-            else:
-                snap.error = f"HTTP {code}"
+        config = _fetch_billing(token)
+        if config is None:
+            # One refresh + retry on auth failure (proxy may have rotated
+            # the token between us and the relay).
+            try:
+                token = _refresh_grok_token(path, entry)
+                config = _fetch_billing(token)
+            except (RuntimeError, requests.RequestException) as exc:
+                # Don't hide the relay-down message under the refresh error.
+                snap.error = f"{exc}"
+                if "runtime" not in snap.error.lower():
+                    snap.error += " — " + RELAY_HINT
                 return snap
-        except requests.RequestException as exc:
-            snap.error = f"Сетевая ошибка: {exc}"
+        if config is None:
+            # All probes failed: either the relay is down (521) or the token
+            # is rejected. Surface the hint so the user knows how to read
+            # their actual weekly window.
+            snap.error = (
+                "Grok: /v1/billing не отвечает. " + RELAY_HINT
+            )
             return snap
-        _apply_rate_limits(snap, limits)
-        # Best-effort monthly spend.
-        billing = _fetch_billing(token)
-        if billing:
-            config = billing.get("config") or {}
-            used = (config.get("used") or {}).get("val")
-            limit = (config.get("monthlyLimit") or {}).get("val")
-            if used is not None and limit:
-                snap.extra["Расход/мес."] = f"${used / 100:.2f} / ${limit / 100:.2f}"
+        _apply_billing(snap, config)
         renewal = subscription_renewal(cfg, "grok")
         if renewal:
             snap.extra["Продление"] = renewal
+        if not snap.windows:
+            snap.error = "Grok: биллинг вернул пустые данные"
         return snap
 
     # Path 2: API key fallback (console.x.ai).
@@ -261,6 +290,9 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
             "Нет OAuth (~/.grok/auth.json) и нет API-ключа — войдите через "
             "grok CLI или укажите ключ XAI в настройках"
         )
+        return snap
+    if not looks_like_api_key(key):
+        snap.error = "В поле ключа вставлен не ключ — вставьте XAI_API_KEY заново"
         return snap
     budget = cfg.get("grok_budget_usd") or 0
     if budget > 0:
@@ -275,22 +307,3 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
         "войдите через grok CLI для лимитов подписки"
     )
     return snap
-
-
-def _apply_rate_limits(snap: ProviderSnapshot, limits: dict) -> None:
-    """Convert x-ratelimit-* header values into a RateWindow (weekly %)."""
-    limit = limits.get("limit_tokens")
-    remaining = limits.get("remaining_tokens")
-    if limit and remaining is not None:
-        used = max(0, limit - remaining)
-        pct = min(100.0, used / limit * 100) if limit > 0 else 0.0
-        snap.windows.append(RateWindow("Неделя (токены)", pct))
-    # Request quota as a secondary window if present.
-    rlim = limits.get("limit_requests")
-    rrem = limits.get("remaining_requests")
-    if rlim and rrem is not None:
-        rused = max(0, rlim - rrem)
-        rpct = min(100.0, rused / rlim * 100) if rlim > 0 else 0.0
-        snap.windows.append(RateWindow("Окно (запросы)", rpct))
-    if not snap.windows:
-        snap.error = "Grok не вернул заголовков x-ratelimit-*"
