@@ -40,6 +40,12 @@ DEFAULTS = {
     "tavily_renewal_period": "month",
     "grok_renewal_date": "",
     "grok_renewal_period": "month",
+    "kimi_api_key": "",  # Moonshot coding-plan API key (api.kimi.com)
+    "kimi_renewal_date": "",
+    "kimi_renewal_period": "month",
+    "copilot_token": "",  # GitHub OAuth token (ghp_…/gho_…); gh auth login preferred
+    "copilot_renewal_date": "",
+    "copilot_renewal_period": "month",
 }
 
 

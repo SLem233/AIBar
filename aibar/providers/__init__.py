@@ -1,4 +1,4 @@
-from . import claude, codex, cursor, gemini, grok, opencode, openai_api, tavily, zai
+from . import claude, codex, copilot, cursor, gemini, grok, kimi, opencode, openai_api, tavily, zai
 from .base import ProviderSnapshot, RateWindow
 
 # Registry of available providers: name -> fetch(cfg) callable.
@@ -9,6 +9,8 @@ PROVIDERS = {
     "Cursor": cursor.fetch,
     "Z.ai": zai.fetch,
     "Grok": grok.fetch,
+    "Kimi": kimi.fetch,
+    "Copilot": copilot.fetch,
     "OpenCode": opencode.fetch,
     "Google": gemini.fetch,
     "OpenAI API": openai_api.fetch,
@@ -22,6 +24,8 @@ PROVIDER_HINTS = {
     "Cursor": "сессия приложения Cursor",
     "Z.ai": "API-ключ coding-плана (zcode)",
     "Grok": "OAuth grok CLI (~/.grok): списание подписки (месячный prepaid)",
+    "Kimi": "coding-plan API-ключ (api.kimi.com)",
+    "Copilot": "токен GitHub (gh auth login или ghp_…)",
     "OpenCode": "cookie с opencode.ai",
     "Google": "квоты Gemini (вход gemini CLI, ~/.gemini)",
     "OpenAI API": "Admin-ключ: расход и остаток",

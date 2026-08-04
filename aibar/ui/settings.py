@@ -131,6 +131,12 @@ class SettingsDialog(QDialog):
         self.grok_key = QLineEdit(cfg.get("grok_api_key") or "")
         self.grok_key.setEchoMode(QLineEdit.Password)
         self.grok_key.setPlaceholderText("xai-… (опц. — OAuth из grok CLI предпочтительнее)")
+        self.kimi_key = QLineEdit(cfg.get("kimi_api_key") or "")
+        self.kimi_key.setEchoMode(QLineEdit.Password)
+        self.kimi_key.setPlaceholderText("Moonshot coding-plan key (api.kimi.com)")
+        self.copilot_key = QLineEdit(cfg.get("copilot_token") or "")
+        self.copilot_key.setEchoMode(QLineEdit.Password)
+        self.copilot_key.setPlaceholderText("ghp_… (опц. — gh auth login предпочтительнее)")
         form.addRow("Z.ai API-ключ:", self.zai_key)
         form.addRow("Z.ai регион:", self.zai_region)
         form.addRow("OpenCode cookie:", self.opencode_cookie)
@@ -138,6 +144,8 @@ class SettingsDialog(QDialog):
         form.addRow("OpenAI Admin-ключ:", self.openai_key)
         form.addRow("Tavily API-ключ:", self.tavily_key)
         form.addRow("Grok (xAI) API-ключ:", self.grok_key)
+        form.addRow("Kimi (Moonshot) ключ:", self.kimi_key)
+        form.addRow("GitHub Copilot токен:", self.copilot_key)
         return page
 
     def _billing_tab(self, cfg: dict) -> QWidget:
@@ -170,6 +178,8 @@ class SettingsDialog(QDialog):
         form.addRow("Cursor: продление:", renewal_row("cursor"))
         form.addRow("Z.ai: продление:", renewal_row("zai"))
         form.addRow("Grok: продление:", renewal_row("grok"))
+        form.addRow("Kimi: продление:", renewal_row("kimi"))
+        form.addRow("Copilot: продление:", renewal_row("copilot"))
         form.addRow("Tavily: продление:", renewal_row("tavily"))
 
         self.openai_budget = QSpinBox()
@@ -231,7 +241,9 @@ class SettingsDialog(QDialog):
         cfg["openai_balance_date"] = self.openai_balance_date_edit.text().strip()
         cfg["tavily_api_key"] = self.tavily_key.text().strip()
         cfg["grok_api_key"] = self.grok_key.text().strip()
-        for prefix in ("claude", "cursor", "zai", "grok", "tavily"):
+        cfg["kimi_api_key"] = self.kimi_key.text().strip()
+        cfg["copilot_token"] = self.copilot_key.text().strip()
+        for prefix in ("claude", "cursor", "zai", "grok", "kimi", "copilot", "tavily"):
             cfg[f"{prefix}_renewal_date"] = getattr(self, f"{prefix}_renewal_date").text().strip()
             cfg[f"{prefix}_renewal_period"] = getattr(self, f"{prefix}_renewal_period").currentData()
         cfg["refresh_seconds"] = self.interval.value() * 60
