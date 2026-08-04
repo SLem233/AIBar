@@ -149,3 +149,107 @@ def test_claude_missing_credentials_file(monkeypatch, tmp_path):
     snap = claude.fetch({})
     assert snap.error is not None
     assert "не найден" in snap.error
+
+
+def test_claude_refresh_200_with_missing_access_token(monkeypatch, tmp_path):
+    """200 with a body lacking access_token must NOT raise KeyError.
+
+    Previously body["access_token"] could throw KeyError/JSONDecodeError that
+    escaped into the polling loop because fetch() only caught
+    RuntimeError/RequestException. Now it's a RuntimeError with a clear msg.
+    """
+    cred = _write_creds(tmp_path, expired=True)
+    monkeypatch.setattr(claude, "_cred_path", lambda: cred)
+    monkeypatch.setattr(
+        claude.requests, "post",
+        lambda *a, **kw: FakeResp(200, payload={"error": "unexpected"}),
+    )
+    monkeypatch.setattr(
+        claude.requests, "get",
+        lambda *a, **kw: FakeResp(200, payload=USAGE_BODY),
+    )
+    # Must not raise — fetch() catches RuntimeError into snap.error.
+    snap = claude.fetch({})
+    assert snap.error is not None
+    assert "access_token" in snap.error
+    assert snap.windows == []
+
+
+def test_claude_refresh_200_with_invalid_json(monkeypatch, tmp_path):
+    """200 with non-JSON body (proxy interception) → RuntimeError, not crash."""
+    cred = _write_creds(tmp_path, expired=True)
+    monkeypatch.setattr(claude, "_cred_path", lambda: cred)
+
+    class BadJsonResp(FakeResp):
+        def json(self):
+            raise ValueError("not json")
+
+    monkeypatch.setattr(claude.requests, "post", lambda *a, **kw: BadJsonResp(200))
+    monkeypatch.setattr(
+        claude.requests, "get",
+        lambda *a, **kw: FakeResp(200, payload=USAGE_BODY),
+    )
+    snap = claude.fetch({})
+    assert snap.error is not None
+    assert "JSON" in snap.error or "невалидный" in snap.error
+
+
+def test_claude_refresh_error_does_not_leak_response_body(monkeypatch, tmp_path):
+    """Refresh failure message must NOT include resp.text (UI surface)."""
+    cred = _write_creds(tmp_path, expired=True)
+    monkeypatch.setattr(claude, "_cred_path", lambda: cred)
+    monkeypatch.setattr(
+        claude.requests, "post",
+        lambda *a, **kw: FakeResp(500, text='{"secret":"sensitive"}'),
+    )
+    monkeypatch.setattr(
+        claude.requests, "get",
+        lambda *a, **kw: FakeResp(200, payload=USAGE_BODY),
+    )
+    snap = claude.fetch({})
+    assert snap.error is not None
+    assert "500" in snap.error
+    assert "secret" not in snap.error
+    assert "sensitive" not in snap.error
+
+
+def test_claude_auto_refresh_disabled_skips_refresh(monkeypatch, tmp_path):
+    """claude_auto_refresh=False → no refresh attempt; stale token used directly.
+
+    This is the kill-switch for users who run multiple AIBar instances on one
+    token file and hit refresh-token rotation races.
+    """
+    cred = _write_creds(tmp_path, expired=True)  # expired
+    monkeypatch.setattr(claude, "_cred_path", lambda: cred)
+    post_calls = []
+    monkeypatch.setattr(
+        claude.requests, "post",
+        lambda *a, **kw: post_calls.append(1) or FakeResp(200, payload={}),
+    )
+    # Usage call uses the stale token; that's fine for the test (we just want
+    # to confirm the proactive refresh is skipped).
+    monkeypatch.setattr(
+        claude.requests, "get",
+        lambda *a, **kw: FakeResp(200, payload=USAGE_BODY),
+    )
+    snap = claude.fetch({"claude_auto_refresh": False})
+    assert len(post_calls) == 0  # no proactive refresh
+
+
+def test_claude_auto_refresh_disabled_on_401_returns_error_not_refresh(monkeypatch, tmp_path):
+    """With auto_refresh off, a 401 from usage surfaces as error, not refresh."""
+    cred = _write_creds(tmp_path, expired=False)  # not proactively refreshed anyway
+    monkeypatch.setattr(claude, "_cred_path", lambda: cred)
+    post_calls = []
+    monkeypatch.setattr(
+        claude.requests, "post",
+        lambda *a, **kw: post_calls.append(1) or FakeResp(200, payload={}),
+    )
+    monkeypatch.setattr(
+        claude.requests, "get",
+        lambda *a, **kw: FakeResp(401),
+    )
+    snap = claude.fetch({"claude_auto_refresh": False})
+    assert snap.error is not None
+    assert "истёк" in snap.error or "войдите" in snap.error.lower()
+    assert len(post_calls) == 0  # no refresh+retry

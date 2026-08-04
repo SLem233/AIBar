@@ -174,3 +174,112 @@ def test_token_from_settings_beats_both_env_and_gh(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "env-token-1234567890")
     monkeypatch.setattr(copilot, "_token_from_gh_cli", lambda: "gh-cli-token")
     assert copilot._api_token({"copilot_token": "explicit-ghp-token"}) == "explicit-ghp-token"
+
+
+# ---- _token_from_gh_cli security & UX ------------------------------------
+def test_gh_cli_no_subprocess_when_which_returns_none(monkeypatch):
+    """If shutil.which('gh') returns None, no subprocess is launched.
+
+    This is the security core: never trust a relative 'gh' that CreateProcess
+    would resolve from the exe directory or CWD on Windows.
+    """
+    monkeypatch.setattr(copilot.shutil, "which", lambda name: None)
+    launched = []
+    monkeypatch.setattr(
+        copilot.subprocess, "run",
+        lambda *a, **kw: launched.append(a) or None,
+    )
+    # Reset cache so the function re-evaluates.
+    monkeypatch.setattr(copilot, "_gh_cli_resolved", False)
+    monkeypatch.setattr(copilot, "_gh_cli_token_cache", None)
+    result = copilot._token_from_gh_cli()
+    assert result is None
+    assert launched == []  # never called subprocess
+
+
+def test_gh_cli_launches_by_absolute_path(monkeypatch):
+    """subprocess.run argv[0] is the absolute path returned by shutil.which,
+    never the bare 'gh' string. This blocks planted gh.exe hijacking."""
+    abs_path = "/usr/bin/gh" if copilot.sys.platform != "win32" else r"C:\Program Files\GitHub CLI\gh.exe"
+    monkeypatch.setattr(copilot.shutil, "which", lambda name: abs_path)
+
+    captured = {}
+
+    class FakeResult:
+        returncode = 0
+        stdout = "gho_token_1234567890abcdef\n"
+        stderr = ""
+
+    def fake_run(argv, **kw):
+        captured["argv"] = argv
+        captured["kw"] = kw
+        return FakeResult()
+
+    monkeypatch.setattr(copilot.subprocess, "run", fake_run)
+    monkeypatch.setattr(copilot, "_gh_cli_resolved", False)
+    monkeypatch.setattr(copilot, "_gh_cli_token_cache", None)
+
+    result = copilot._token_from_gh_cli()
+    assert result == "gho_token_1234567890abcdef"
+    assert captured["argv"][0] == abs_path  # absolute, not "gh"
+
+
+def test_gh_cli_passes_create_no_window_on_windows(monkeypatch):
+    """On Windows, creationflags includes CREATE_NO_WINDOW (no console flash)."""
+    monkeypatch.setattr(copilot.sys, "platform", "win32")
+    monkeypatch.setattr(copilot.shutil, "which", lambda name: r"C:\gh.exe")
+    captured = {}
+
+    class FakeResult:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(argv, **kw):
+        captured.update(kw)
+        return FakeResult()
+
+    monkeypatch.setattr(copilot.subprocess, "run", fake_run)
+    monkeypatch.setattr(copilot, "_gh_cli_resolved", False)
+    monkeypatch.setattr(copilot, "_gh_cli_token_cache", None)
+    copilot._token_from_gh_cli()
+    flags = captured.get("creationflags", 0)
+    # CREATE_NO_WINDOW = 0x08000000
+    assert flags & 0x08000000 == 0x08000000
+
+
+def test_gh_cli_token_is_cached(monkeypatch):
+    """Second call does NOT spawn another subprocess (5-min poll cycle)."""
+    monkeypatch.setattr(copilot.shutil, "which", lambda name: "/usr/bin/gh")
+    call_count = {"n": 0}
+
+    class FakeResult:
+        returncode = 0
+        stdout = "gho_cached_token_abcdef\n"
+        stderr = ""
+
+    def fake_run(argv, **kw):
+        call_count["n"] += 1
+        return FakeResult()
+
+    monkeypatch.setattr(copilot.subprocess, "run", fake_run)
+    monkeypatch.setattr(copilot, "_gh_cli_resolved", False)
+    monkeypatch.setattr(copilot, "_gh_cli_token_cache", None)
+
+    assert copilot._token_from_gh_cli() == "gho_cached_token_abcdef"
+    assert copilot._token_from_gh_cli() == "gho_cached_token_abcdef"
+    assert copilot._token_from_gh_cli() == "gho_cached_token_abcdef"
+    assert call_count["n"] == 1  # cached, only one subprocess launch
+
+
+def test_gh_cli_timeout_returns_none(monkeypatch):
+    """subprocess.TimeoutExpired → None (no exception escape)."""
+    monkeypatch.setattr(copilot.shutil, "which", lambda name: "/usr/bin/gh")
+
+    def fake_run(argv, **kw):
+        raise copilot.subprocess.TimeoutExpired(cmd=argv, timeout=8)
+
+    monkeypatch.setattr(copilot.subprocess, "run", fake_run)
+    monkeypatch.setattr(copilot, "_gh_cli_resolved", False)
+    monkeypatch.setattr(copilot, "_gh_cli_token_cache", None)
+    assert copilot._token_from_gh_cli() is None

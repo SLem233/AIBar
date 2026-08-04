@@ -91,10 +91,19 @@ def _do_refresh(cred, oauth: dict) -> str:
         timeout=TIMEOUT,
     )
     if resp.status_code != 200:
-        raise RuntimeError(f"refresh HTTP {resp.status_code}: {resp.text[:200]}")
-    body = resp.json()
+        # Never leak response body into the UI error string.
+        raise RuntimeError(f"refresh HTTP {resp.status_code}")
+    try:
+        body = resp.json()
+    except (ValueError, json.JSONDecodeError):
+        raise RuntimeError("refresh: невалидный JSON в ответе") from None
+    access = body.get("access_token") if isinstance(body, dict) else None
+    if not access:
+        # 200 with unexpected body (proxy interception, edge error envelope, etc.)
+        # — never let a KeyError escape into the polling loop.
+        raise RuntimeError("refresh: в ответе нет access_token")
     now_ms = int(time.time() * 1000)
-    oauth["accessToken"] = body["access_token"]
+    oauth["accessToken"] = access
     if body.get("refresh_token"):
         oauth["refreshToken"] = body["refresh_token"]
     if body.get("expires_in"):
@@ -172,8 +181,11 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
 
     # Proactively refresh if the access token has expired (the GUI doesn't
     # always keep it fresh on its own — this is what enables GUI-only use).
+    # ``claude_auto_refresh`` lets the user disable this if they run multiple
+    # AIBar instances against one token file (refresh-token rotation races).
+    auto_refresh = (cfg or {}).get("claude_auto_refresh", True)
     exp = oauth.get("expiresAt")
-    if isinstance(exp, (int, float)) and int(time.time() * 1000) >= exp - 60_000:
+    if auto_refresh and isinstance(exp, (int, float)) and int(time.time() * 1000) >= exp - 60_000:
         try:
             token = _refresh(cred, oauth)
         except (RuntimeError, requests.RequestException) as exc:
@@ -188,6 +200,10 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
             snap.error = f"HTTP {exc.response.status_code}"
             return snap
         # Token rejected despite local validity — one refresh + retry.
+        if not auto_refresh:
+            snap.http_status = exc.response.status_code
+            snap.error = "Токен Claude истёк — войдите в claude или Claude Desktop"
+            return snap
         try:
             token = _refresh(cred, oauth)
             data = _usage(token)

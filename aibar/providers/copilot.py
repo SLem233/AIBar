@@ -37,7 +37,9 @@ auth or device flow is needed for the usage read.
 """
 
 import os
+import shutil
 import subprocess
+import sys
 
 import requests
 
@@ -73,21 +75,58 @@ PLAN_SKUS = {
 }
 
 
+# Cached gh-CLI token (process-lifetime; gh auth token hits the OS keyring
+# but spawns a process — don't do it every poll cycle).
+_gh_cli_token_cache: str | None = None
+_gh_cli_resolved: bool = False
+
+
+def _no_window_flags() -> int:
+    """CREATE_NO_WINDOW on Windows so the GUI doesn't flash a console every poll.
+
+    CreateProcess otherwise opens a visible black console window for the
+    transient ``gh auth token`` subprocess. ``0`` on non-Windows (no effect).
+    """
+    if sys.platform == "win32":
+        return getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0x08000000
+    return 0
+
+
 def _token_from_gh_cli() -> str | None:
-    """Best-effort: `gh auth token` (token is in the OS keyring, not a file)."""
+    """Best-effort: ``gh auth token`` (token is in the OS keyring, not a file).
+
+    Security: resolve ``gh`` via ``shutil.which`` and launch it by absolute
+    path. On Windows, ``CreateProcess`` searches the executable's own
+    directory and the current directory *before* ``PATH`` — so a planted
+    ``gh.exe`` next to ``AIBar.exe`` (e.g. in a Downloads folder) would
+    otherwise capture the user's GitHub token. ``which`` honours ``PATH``
+    only and never resolves relative names from those hostile locations.
+    """
+    global _gh_cli_token_cache, _gh_cli_resolved
+    if _gh_cli_resolved:
+        return _gh_cli_token_cache
+
+    gh_path = shutil.which("gh")
+    if not gh_path:
+        _gh_cli_resolved = True
+        return None
     try:
         out = subprocess.run(
-            ["gh", "auth", "token"],
+            [gh_path, "auth", "token"],
             capture_output=True,
             text=True,
             timeout=8,
+            creationflags=_no_window_flags(),
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+    except (subprocess.TimeoutExpired, OSError):
+        _gh_cli_resolved = True
         return None
+    _gh_cli_resolved = True
     if out.returncode != 0:
         return None
     tok = (out.stdout or "").strip()
-    return tok or None
+    _gh_cli_token_cache = tok or None
+    return _gh_cli_token_cache
 
 
 def _api_token(cfg: dict | None) -> str | None:

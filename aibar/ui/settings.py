@@ -175,6 +175,16 @@ class SettingsDialog(QDialog):
             return box
 
         form.addRow("Claude: продление:", renewal_row("claude"))
+        self.claude_auto_refresh = QCheckBox(
+            "Авто-refresh OAuth Claude (для GUI-only использования)"
+        )
+        self.claude_auto_refresh.setChecked(bool(cfg.get("claude_auto_refresh", True)))
+        self.claude_auto_refresh.setToolTip(
+            "Если включено — AIBar сам обновляет протухший токен Claude и "
+            "записывает ротированный обратно в ~/.claude/.credentials.json. "
+            "Отключите при гонках refresh-токенов (несколько AIBar на одном файле)."
+        )
+        form.addRow("", self.claude_auto_refresh)
         form.addRow("Cursor: продление:", renewal_row("cursor"))
         form.addRow("Z.ai: продление:", renewal_row("zai"))
         form.addRow("Grok: продление:", renewal_row("grok"))
@@ -243,6 +253,7 @@ class SettingsDialog(QDialog):
         cfg["grok_api_key"] = self.grok_key.text().strip()
         cfg["kimi_api_key"] = self.kimi_key.text().strip()
         cfg["copilot_token"] = self.copilot_key.text().strip()
+        cfg["claude_auto_refresh"] = self.claude_auto_refresh.isChecked()
         for prefix in ("claude", "cursor", "zai", "grok", "kimi", "copilot", "tavily"):
             cfg[f"{prefix}_renewal_date"] = getattr(self, f"{prefix}_renewal_date").text().strip()
             cfg[f"{prefix}_renewal_period"] = getattr(self, f"{prefix}_renewal_period").currentData()

@@ -32,6 +32,11 @@ DEFAULTS = {
     # billing anchor; empty date = don't show. Past dates roll forward.
     "claude_renewal_date": "",
     "claude_renewal_period": "month",  # month | quarter | year
+    # Auto-refresh expired Claude OAuth tokens (writes rotated token back to
+    # ~/.claude/.credentials.json). On by default — this is what enables
+    # GUI-only Claude Desktop use. Turn off if you run multiple AIBar
+    # instances on the same token file and see rotation races.
+    "claude_auto_refresh": True,
     "cursor_renewal_date": "",
     "cursor_renewal_period": "year",
     "zai_renewal_date": "",
