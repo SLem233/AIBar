@@ -107,6 +107,8 @@ class AIBarApp:
         self.widget.hide_requested.connect(lambda: self.set_widget_enabled(False))
         self.widget.quit_requested.connect(app.quit)
         self.widget.geometry_changed.connect(self.save_widget_geometry)
+        # ориентацию восстанавливаем до геометрии: кадр сохранён уже повёрнутым
+        self.widget.set_orientation(bool(self.cfg.get("widget_horizontal", False)))
         geometry = self.cfg.get("widget_geometry")
         if geometry and len(geometry) == 4:
             self.widget.setGeometry(*geometry)
@@ -226,6 +228,7 @@ class AIBarApp:
     def save_widget_geometry(self) -> None:
         geo = self.widget.geometry()
         self.cfg["widget_geometry"] = [geo.x(), geo.y(), geo.width(), geo.height()]
+        self.cfg["widget_horizontal"] = self.widget.is_horizontal
         config.save(self.cfg)
 
     def set_interval(self, seconds: int) -> None:

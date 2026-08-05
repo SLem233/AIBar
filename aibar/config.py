@@ -12,6 +12,8 @@ DEFAULTS = {
     "providers": ["Claude", "Codex"],
     "widget_enabled": True,
     "widget_geometry": None,  # [x, y, w, h]
+    # ряд вместо колонки: виджет разворачивается сам у верхнего и нижнего края
+    "widget_horizontal": False,
     "widget_mode": "full",  # full | mini (mini: only providers near the limit)
     # сворачивать виджет за край экрана, когда он к этому краю прижат
     "widget_autohide": False,
@@ -27,6 +29,14 @@ DEFAULTS = {
     "openai_balance_usd": 0,
     "openai_balance_date": "",
     "tavily_api_key": "",
+    "kimi_api_key": "",
+    # Токен GitHub для Copilot: пусто = берём из GITHUB_TOKEN/GH_TOKEN или gh CLI
+    "copilot_token": "",
+    # Менять протухший токен самим (нужно тем, кто не запускает CLI).
+    # Выключено — файл входа только читается: ~/.claude/.credentials.json,
+    # ~/.grok/auth.json.
+    "claude_auto_refresh": True,
+    "grok_auto_refresh": True,
     # Личная фича (ветка slem): путь к ledger AgentPulse для пункта «Статистика»
     "agentpulse_db": r"C:\SL\CursosWorkspace\AgentPulse\data\ledger.db",
     # Папка карточек проектов в vault — имена проектов на дашборде кликабельны
@@ -43,6 +53,12 @@ DEFAULTS = {
     "zai_renewal_period": "month",
     "tavily_renewal_date": "",
     "tavily_renewal_period": "month",
+    "kimi_renewal_date": "",
+    "kimi_renewal_period": "month",
+    "copilot_renewal_date": "",
+    "copilot_renewal_period": "month",
+    "grok_renewal_date": "",
+    "grok_renewal_period": "month",
 }
 
 

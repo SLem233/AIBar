@@ -14,7 +14,9 @@ class Resp:
 
 
 def test_claude_sets_http_status_on_403(monkeypatch):
-    monkeypatch.setattr(claude, "_load_credentials", lambda: {"accessToken": "tok"})
+    monkeypatch.setattr(
+        claude, "_load_oauth", lambda: (None, {"accessToken": "tok"})
+    )
     monkeypatch.setattr(claude.requests, "get", lambda *a, **kw: Resp(403))
     snap = claude.fetch({})
     assert snap.http_status == 403

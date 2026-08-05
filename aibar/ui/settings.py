@@ -128,12 +128,43 @@ class SettingsDialog(QDialog):
         self.tavily_key = QLineEdit(cfg.get("tavily_api_key") or "")
         self.tavily_key.setEchoMode(QLineEdit.Password)
         self.tavily_key.setPlaceholderText("tvly-…")
+        self.kimi_key = QLineEdit(cfg.get("kimi_api_key") or "")
+        self.kimi_key.setEchoMode(QLineEdit.Password)
+        self.kimi_key.setPlaceholderText("ключ coding-плана с platform.moonshot.ai")
+        self.copilot_token = QLineEdit(cfg.get("copilot_token") or "")
+        self.copilot_token.setEchoMode(QLineEdit.Password)
+        self.copilot_token.setPlaceholderText("пусто = из gh CLI или GITHUB_TOKEN")
+        self.copilot_token.setToolTip(
+            "Токен GitHub. Если оставить пустым, приложение возьмёт его из "
+            "переменных GITHUB_TOKEN/GH_TOKEN, а затем из gh CLI (gh auth token)."
+        )
+        self.claude_auto_refresh = QCheckBox(
+            "Claude: обновлять протухший токен самостоятельно"
+        )
+        self.claude_auto_refresh.setChecked(bool(cfg.get("claude_auto_refresh", True)))
+        self.claude_auto_refresh.setToolTip(
+            "Нужно тем, кто пользуется только Claude Desktop и не запускает CLI: "
+            "приложение меняет токен по refresh-токену и записывает новый в "
+            "~/.claude/.credentials.json. Выключено — файл только читается."
+        )
+        self.grok_auto_refresh = QCheckBox(
+            "Grok: обновлять протухший токен самостоятельно"
+        )
+        self.grok_auto_refresh.setChecked(bool(cfg.get("grok_auto_refresh", True)))
+        self.grok_auto_refresh.setToolTip(
+            "То же для ~/.grok/auth.json: без обмена лимиты Grok пропадут, "
+            "как только токен истечёт, и придётся заново запускать grok CLI."
+        )
         form.addRow("Z.ai API-ключ:", self.zai_key)
         form.addRow("Z.ai регион:", self.zai_region)
+        form.addRow("Kimi API-ключ:", self.kimi_key)
+        form.addRow("GitHub токен (Copilot):", self.copilot_token)
         form.addRow("OpenCode cookie:", self.opencode_cookie)
         form.addRow("OpenCode workspace:", self.opencode_workspace)
         form.addRow("OpenAI Admin-ключ:", self.openai_key)
         form.addRow("Tavily API-ключ:", self.tavily_key)
+        form.addRow("", self.claude_auto_refresh)
+        form.addRow("", self.grok_auto_refresh)
         return page
 
     def _billing_tab(self, cfg: dict) -> QWidget:
@@ -165,6 +196,9 @@ class SettingsDialog(QDialog):
         form.addRow("Claude: продление:", renewal_row("claude"))
         form.addRow("Cursor: продление:", renewal_row("cursor"))
         form.addRow("Z.ai: продление:", renewal_row("zai"))
+        form.addRow("Kimi: продление:", renewal_row("kimi"))
+        form.addRow("Grok: продление:", renewal_row("grok"))
+        form.addRow("Copilot: продление:", renewal_row("copilot"))
         form.addRow("Tavily: продление:", renewal_row("tavily"))
 
         self.openai_budget = QSpinBox()
@@ -213,7 +247,11 @@ class SettingsDialog(QDialog):
         cfg["openai_balance_usd"] = self.openai_balance.value()
         cfg["openai_balance_date"] = self.openai_balance_date_edit.text().strip()
         cfg["tavily_api_key"] = self.tavily_key.text().strip()
-        for prefix in ("claude", "cursor", "zai", "tavily"):
+        cfg["kimi_api_key"] = self.kimi_key.text().strip()
+        cfg["copilot_token"] = self.copilot_token.text().strip()
+        cfg["claude_auto_refresh"] = self.claude_auto_refresh.isChecked()
+        cfg["grok_auto_refresh"] = self.grok_auto_refresh.isChecked()
+        for prefix in ("claude", "cursor", "zai", "kimi", "grok", "copilot", "tavily"):
             cfg[f"{prefix}_renewal_date"] = getattr(self, f"{prefix}_renewal_date").text().strip()
             cfg[f"{prefix}_renewal_period"] = getattr(self, f"{prefix}_renewal_period").currentData()
         cfg["refresh_seconds"] = self.interval.value() * 60
