@@ -1,158 +1,39 @@
-"""Always-on-top desktop widget: a column of per-provider radial gauges.
+"""Always-on-top desktop widget: a row or column of per-provider radial gauges.
 
-Draggable anywhere, resizable via the bottom-right grip; hovering shows a
-panel with the full per-provider breakdown next to the widget. Прижатый к краю
-экрана виджет умеет сворачиваться туда за ненадобностью — см. edge_collapse.
+Виджет таскается за середину и меняет размер за любую сторону и любой угол
+рамки. Ориентация подстраивается под край экрана: у левого и правого края это
+колонка колец, у верхнего и нижнего — ряд. Наведение показывает панель с полной
+разбивкой по провайдерам, а прижатый к краю виджет умеет сворачиваться туда за
+ненадобностью — см. edge_collapse.
 """
 
 import time
-from datetime import datetime
 
-from PySide6.QtCore import QPoint, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QCursor, QPainter
-from PySide6.QtWidgets import (
-    QHBoxLayout,
-    QLabel,
-    QMenu,
-    QPushButton,
-    QSizeGrip,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QHBoxLayout, QMenu, QVBoxLayout, QWidget
 
-from .. import __version__, theme
+from .. import __version__
 from ..providers.base import ProviderSnapshot
 from .badges import UpdateBadge, VpnBadge
-from .dashboard import ProviderCard
-from .edge_collapse import EdgeCollapse
-from .gauge import RadialGauge
+from .edge_collapse import EdgeCollapse, docked_edge, flush_pos
+from .hover_panel import WIDGET_FLAGS, HoverPanel
+from .tiles import GaugeTile, soonest_countdown
 
-WIDGET_FLAGS = Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
+# Полоса у края рамки, за которую её тянут; центр остаётся зоной перетаскивания.
+RESIZE_MARGIN = 8
+# Поля кадра равны полосе захвата: меньше нельзя (полоса уедет на плитки),
+# больше — зря съедает ширину, из-за которой подписи пропадают раньше времени.
+FRAME_MARGIN = RESIZE_MARGIN
 
-__all__ = ["DesktopWidget", "GaugeTile", "HoverPanel", "UpdateBadge", "VpnBadge"]
-
-
-class HoverPanel(QWidget):
-    """Extended info shown while the mouse is over the widget (or the panel)."""
-
-    hover_changed = Signal(bool)
-    refresh_requested = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowFlags(WIDGET_FLAGS)
-        self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedWidth(400)
-        self.setStyleSheet(
-            f"""
-            QLabel {{ color: {theme.TEXT_SECONDARY}; font-family: "{theme.FONT_FAMILY}"; }}
-            #card {{
-                background: {theme.SURFACE};
-                border: 1px solid {theme.BORDER};
-                border-radius: 10px;
-            }}
-            #cardTitle {{ color: {theme.TEXT_PRIMARY}; font-size: 15px; font-weight: 600; }}
-            #cardPlan {{ color: {theme.TEXT_MUTED}; font-size: 12px; }}
-            #header {{ color: {theme.TEXT_PRIMARY}; font-size: 14px; font-weight: 600; }}
-            #footer {{ color: {theme.TEXT_MUTED}; font-size: 11px; }}
-            QPushButton {{
-                background: {theme.SURFACE};
-                color: {theme.TEXT_SECONDARY};
-                border: 1px solid {theme.BORDER};
-                border-radius: 6px;
-                padding: 4px 10px;
-            }}
-            QPushButton:hover {{ color: {theme.TEXT_PRIMARY}; border-color: {theme.TEXT_MUTED}; }}
-            """
-        )
-        self._cards: dict[str, ProviderCard] = {}
-        self.cards_layout = QVBoxLayout()
-        self.cards_layout.setSpacing(8)
-        self.footer = QLabel("")
-        self.footer.setObjectName("footer")
-
-        header = QLabel("Лимиты AI-провайдеров")
-        header.setObjectName("header")
-        self.refresh_btn = QPushButton("Обновить")
-        self.refresh_btn.clicked.connect(self.refresh_requested)
-        top = QHBoxLayout()
-        top.addWidget(header)
-        top.addStretch()
-        top.addWidget(self.refresh_btn)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 8)
-        layout.setSpacing(8)
-        layout.addLayout(top)
-        layout.addLayout(self.cards_layout)
-        layout.addWidget(self.footer)
-
-    def update_snapshots(self, snapshots: list[ProviderSnapshot]) -> None:
-        for snap in snapshots:
-            card = self._cards.get(snap.provider)
-            if card is None:
-                card = ProviderCard()
-                self._cards[snap.provider] = card
-                self.cards_layout.addWidget(card)
-            card.update_snapshot(snap)
-        self.footer.setText(
-            f"AIBar v{__version__} · Обновлено {datetime.now().strftime('%H:%M:%S')}"
-        )
-        self.adjustSize()
-
-    def clear_cards(self) -> None:
-        for card in self._cards.values():
-            self.cards_layout.removeWidget(card)
-            card.deleteLater()
-        self._cards.clear()
-
-    # Keep the panel open while the mouse is over it
-    def enterEvent(self, event) -> None:
-        self.hover_changed.emit(True)
-        super().enterEvent(event)
-
-    def leaveEvent(self, event) -> None:
-        self.hover_changed.emit(False)
-        super().leaveEvent(event)
-
-    def paintEvent(self, event) -> None:
-        # Translucent frameless window: paint the rounded surface manually.
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(QColor(255, 255, 255, 26))
-        painter.setBrush(QColor(theme.PAGE))
-        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 10, 10)
-        painter.end()
-
-
-class GaugeTile(QWidget):
-    """One provider's gauge with a caption underneath."""
-
-    def __init__(self, provider: str, parent=None):
-        super().__init__(parent)
-        self.gauge = RadialGauge(scalable=True)
-        self.caption = QLabel(provider)
-        self.caption.setAlignment(Qt.AlignHCenter)
-        self.caption.setStyleSheet(
-            f'color: {theme.TEXT_SECONDARY}; font-family: "{theme.FONT_FAMILY}"; font-size: 11px;'
-        )
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(2)
-        layout.addWidget(self.gauge, stretch=1)
-        layout.addWidget(self.caption)
-
-    def update_snapshot(self, snap: ProviderSnapshot) -> None:
-        self.gauge.set_percents([w.used_percent for w in snap.windows])
-        suffix = " ⏸" if snap.paused else (" ⚠" if snap.error else "")
-        self.caption.setText(f"{snap.provider}{suffix}")
-
-    def resizeEvent(self, event) -> None:
-        # captions don't fit below ~60px — the tooltip still names the provider
-        self.caption.setVisible(self.width() >= 60)
-        self.setToolTip(self.caption.text() if self.width() < 60 else "")
-        super().resizeEvent(event)
+__all__ = [
+    "DesktopWidget",
+    "GaugeTile",
+    "HoverPanel",
+    "UpdateBadge",
+    "VpnBadge",
+    "soonest_countdown",
+]
 
 
 class DesktopWidget(QWidget):
@@ -173,32 +54,41 @@ class DesktopWidget(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setMinimumSize(45, 60)
         self.resize(120, 260)
+        # Курсор над рамкой должен меняться и без нажатой кнопки.
+        self.setMouseTracking(True)
 
         self._drag_offset: QPoint | None = None
+        # Изменение размера за рамку: какие стороны схвачены и с чего начали.
+        self._resize_edge = ""  # сочетание из 'l', 'r', 't', 'b'
+        self._resize_start_geo: QRect | None = None
+        self._resize_start_global: QPoint | None = None
         self._tiles: dict[str, GaugeTile] = {}
         self._context_menu: QMenu | None = None
         self._snapshots: list[ProviderSnapshot] = []
         self._mode = "full"  # full | mini
         self._mini_threshold = 70.0
+        self._horizontal = False  # колонка; ряд — у верхнего и нижнего края
         # (timestamp, {provider: summed window percents}) for the last 15 min
         self._activity: list[tuple[float, dict[str, float]]] = []
         self._last_solo: str | None = None
 
-        self.tiles_layout = QVBoxLayout()
-        self.tiles_layout.setSpacing(6)
-
-        grip = QSizeGrip(self)
-        grip.setStyleSheet("background: transparent; width: 14px; height: 14px;")
+        # Плитки живут в одном из двух layout'ов — активный зависит от края.
+        self.tiles_vbox = QVBoxLayout()
+        self.tiles_vbox.setSpacing(6)
+        self.tiles_hbox = QHBoxLayout()
+        self.tiles_hbox.setSpacing(6)
 
         self.update_badge = UpdateBadge(self)
         self.vpn_badge = VpnBadge(self)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 2)
+        # Поля со всех сторон одинаковые: за них рамку и тянут, дети сюда не лезут.
+        layout.setContentsMargins(
+            FRAME_MARGIN, FRAME_MARGIN, FRAME_MARGIN, FRAME_MARGIN
+        )
         layout.addWidget(self.update_badge)
         layout.addWidget(self.vpn_badge)
-        layout.addLayout(self.tiles_layout, stretch=1)
-        layout.addWidget(grip, alignment=Qt.AlignBottom | Qt.AlignRight)
+        layout.addLayout(self.tiles_vbox, stretch=1)
 
         self.panel = HoverPanel()
         self.panel.hover_changed.connect(self._on_panel_hover)
@@ -226,7 +116,7 @@ class DesktopWidget(QWidget):
             if tile is None:
                 tile = GaugeTile(snap.provider)
                 self._tiles[snap.provider] = tile
-                self.tiles_layout.addWidget(tile, stretch=1)
+                self._tiles_layout().addWidget(tile, stretch=1)
             tile.update_snapshot(snap)
         self._snapshots = snapshots
         self.vpn_badge.setVisible(any(s.paused for s in snapshots))
@@ -237,7 +127,9 @@ class DesktopWidget(QWidget):
 
     def clear_tiles(self) -> None:
         for tile in self._tiles.values():
-            self.tiles_layout.removeWidget(tile)
+            self.tiles_vbox.removeWidget(tile)
+            self.tiles_hbox.removeWidget(tile)
+            tile.setParent(None)
             tile.deleteLater()
         self._tiles.clear()
         self._activity.clear()
@@ -246,6 +138,74 @@ class DesktopWidget(QWidget):
 
     def set_update_available(self, version: str) -> None:
         self.update_badge.show_version(version)
+
+    # ---- ориентация ------------------------------------------------------
+    @property
+    def is_horizontal(self) -> bool:
+        return self._horizontal
+
+    def _tiles_layout(self) -> QVBoxLayout | QHBoxLayout:
+        return self.tiles_hbox if self._horizontal else self.tiles_vbox
+
+    def _screen_rect(self) -> QRect:
+        screen = self.screen()
+        return screen.availableGeometry() if screen else QRect()
+
+    def set_orientation(self, horizontal: bool, *, transpose: bool = False) -> None:
+        """Переложить плитки в ряд или в колонку.
+
+        `transpose` переворачивает и сам кадр (ш↔в вокруг центра) — так кольца
+        сохраняют размер, а виджет не прыгает углом. При восстановлении
+        сохранённой ориентации переворот не нужен: кадр уже сохранён таким.
+        """
+        if horizontal == self._horizontal:
+            return
+        old, new = self._tiles_layout(), (
+            self.tiles_vbox if self._horizontal else self.tiles_hbox
+        )
+        for tile in self._tiles.values():
+            old.removeWidget(tile)
+            new.addWidget(tile, stretch=1)
+        main = self.layout()
+        for i in range(main.count()):
+            item = main.itemAt(i)
+            if item is old or item.layout() is old:
+                main.removeItem(item)
+                main.insertLayout(i, new, stretch=1)
+                break
+        self._horizontal = horizontal
+        if transpose:
+            self._transpose_frame()
+
+    def _transpose_frame(self) -> None:
+        """Поменять местами ширину и высоту кадра, оставив центр на месте."""
+        center = self.geometry().center()
+        width, height = self.height(), self.width()
+        self.resize(width, height)
+        self.move(self._clamp_to_screen(QPoint(center.x() - width // 2, center.y() - height // 2)))
+
+    def _clamp_to_screen(self, pos: QPoint) -> QPoint:
+        screen = self._screen_rect()
+        if screen.isNull():
+            return pos
+        x = min(max(pos.x(), screen.left()), screen.right() - self.width() + 1)
+        y = min(max(pos.y(), screen.top()), screen.bottom() - self.height() + 1)
+        return QPoint(x, y)
+
+    def sync_edge_layout(self, dock: bool = True) -> str | None:
+        """Подстроить ориентацию под край, к которому прижат кадр.
+
+        Возвращает край или None, если виджет висит посреди экрана — тогда
+        ориентация остаётся прежней. `dock` дожимает кадр вплотную к краю.
+        """
+        screen = self._screen_rect()
+        edge = docked_edge(self.frameGeometry(), screen)
+        if edge is None:
+            return None
+        self.set_orientation(edge in ("top", "bottom"), transpose=True)
+        if dock:
+            self.move(flush_pos(self.frameGeometry(), screen, edge))
+        return edge
 
     # ---- сворачивание за край -------------------------------------------
     def set_autohide(self, enabled: bool) -> None:
@@ -339,25 +299,100 @@ class DesktopWidget(QWidget):
         painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 12, 12)
         painter.end()
 
+    # ---- изменение размера за рамку --------------------------------------
+    def _hit_test(self, local: QPoint) -> str:
+        """Стороны рамки под точкой: строка из 'l', 'r', 't', 'b' («» — центр)."""
+        edge = ""
+        if local.y() <= RESIZE_MARGIN:
+            edge += "t"
+        elif local.y() >= self.height() - 1 - RESIZE_MARGIN:
+            edge += "b"
+        if local.x() <= RESIZE_MARGIN:
+            edge += "l"
+        elif local.x() >= self.width() - 1 - RESIZE_MARGIN:
+            edge += "r"
+        return edge
+
+    @staticmethod
+    def _cursor_for_edge(edge: str) -> Qt.CursorShape:
+        if edge in ("tl", "br"):
+            return Qt.SizeFDiagCursor
+        if edge in ("tr", "bl"):
+            return Qt.SizeBDiagCursor
+        if edge in ("l", "r"):
+            return Qt.SizeHorCursor
+        if edge in ("t", "b"):
+            return Qt.SizeVerCursor
+        return Qt.ArrowCursor
+
+    def _do_resize(self, global_pos: QPoint) -> None:
+        """Двигать схваченные стороны за курсором, не выпуская кадр за экран."""
+        start, origin = self._resize_start_geo, self._resize_start_global
+        edge = self._resize_edge
+        if start is None or origin is None or not edge:
+            return
+        delta = global_pos - origin
+        screen = self._screen_rect()
+        left, top = start.left(), start.top()
+        right, bottom = start.right() + 1, start.bottom() + 1
+        if "l" in edge:
+            left = min(start.left() + delta.x(), right - self.minimumWidth())
+            left = max(left, screen.left())
+        if "r" in edge:
+            right = max(start.right() + 1 + delta.x(), left + self.minimumWidth())
+            right = min(right, screen.right() + 1)
+        if "t" in edge:
+            top = min(start.top() + delta.y(), bottom - self.minimumHeight())
+            top = max(top, screen.top())
+        if "b" in edge:
+            bottom = max(start.bottom() + 1 + delta.y(), top + self.minimumHeight())
+            bottom = min(bottom, screen.bottom() + 1)
+        self.setGeometry(left, top, right - left, bottom - top)
+
     # ---- drag to move ---------------------------------------------------
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
             # схватили за полоску свёрнутого виджета — сначала вернуть его
             self._begin_interaction()
-            self._drag_offset = (
-                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            )
+            local = event.position().toPoint()
+            edge = self._hit_test(local)
+            if edge:
+                self._resize_edge = edge
+                self._resize_start_geo = self.geometry()
+                self._resize_start_global = event.globalPosition().toPoint()
+                self._drag_offset = None
+            else:
+                self._drag_offset = (
+                    event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                )
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
-        if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_offset)
+        if not (event.buttons() & Qt.LeftButton):
+            self.setCursor(self._cursor_for_edge(self._hit_test(event.position().toPoint())))
+            super().mouseMoveEvent(event)
+            return
+
+        pos = event.globalPosition().toPoint()
+        if self._resize_edge:
+            self._do_resize(pos)
+        elif self._drag_offset is not None:
+            self.move(pos - self._drag_offset)
+            was_horizontal = self._horizontal
+            # у края экрана виджет разворачивается и прижимается прямо на лету
+            self.sync_edge_layout()
+            if self._horizontal != was_horizontal:
+                # кадр перевернулся — заново привязываем курсор к рамке
+                self._drag_offset = pos - self.frameGeometry().topLeft()
             self._reposition_panel()
-            self.collapse.notify_activity()
+        self.collapse.notify_activity()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         self._drag_offset = None
+        self._resize_edge = ""
+        self._resize_start_geo = None
+        self._resize_start_global = None
         self.collapse.notify_activity()
         super().mouseReleaseEvent(event)
 
