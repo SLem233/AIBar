@@ -161,3 +161,46 @@ def test_stale_tiny_geometry_grows_to_readable_size(app):
     widget.update_snapshots(snaps)
     assert widget.height() == h_after
 
+
+
+def test_orientation_changed_signal_emits_on_flip(app):
+    """_set_orientation emits orientation_changed so main.py can persist it."""
+    widget = DesktopWidget()
+    _stub_screen(widget, SCREEN)
+    received = []
+    widget.orientation_changed.connect(lambda h: received.append(h))
+    widget._set_orientation(True)
+    assert received == [True]
+    widget._set_orientation(False)
+    assert received == [True, False]
+    # No-op flip (same orientation) doesn't re-emit.
+    widget._set_orientation(False)
+    assert received == [True, False]
+
+
+def test_set_orientation_silent_does_not_transpose_frame(app):
+    """Restore path: orientation applied without transposing the frame,
+    because the saved geometry already has the right w/h."""
+    widget = DesktopWidget()
+    _stub_screen(widget, SCREEN)
+    widget.resize(300, 120)  # wide geometry, like a saved horizontal layout
+    w_before, h_before = widget.width(), widget.height()
+    received = []
+    widget.orientation_changed.connect(lambda h: received.append(h))
+    widget.set_orientation_silent(True)
+    assert widget._horizontal is True
+    # Frame NOT transposed (saved geometry wins).
+    assert (widget.width(), widget.height()) == (w_before, h_before)
+    # No signal emitted — this is a restore, not a user action.
+    assert received == []
+
+
+def test_set_orientation_silent_swaps_tile_layout(app):
+    """Despite no frame transpose, tiles DO move to the right layout."""
+    widget = DesktopWidget()
+    _stub_screen(widget, SCREEN)
+    widget.update_snapshots([snap(), snap("Codex")])
+    widget.set_orientation_silent(True)
+    assert widget.tiles_hbox.count() == 2
+    assert widget.tiles_vbox.count() == 0
+    assert widget._horizontal is True

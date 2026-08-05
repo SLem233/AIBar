@@ -13,6 +13,7 @@ DEFAULTS = {
     "widget_enabled": True,
     "widget_hide_on_idle": False,  # auto-slide the widget off-screen after idle
     "widget_geometry": None,  # [x, y, w, h]
+    "widget_horizontal": False,  # vertical by default; auto-snaps at screen edges
     "widget_mode": "full",  # full | mini (mini: only providers near the limit)
     "mini_threshold": 70,  # percent that qualifies a provider for mini mode
     "zai_api_key": "",

@@ -213,6 +213,7 @@ class DesktopWidget(QWidget):
     """The floating always-on-top row/column of gauges."""
 
     geometry_changed = Signal()
+    orientation_changed = Signal(bool)  # True = horizontal, False = vertical
     refresh_requested = Signal()
     settings_requested = Signal()
     help_requested = Signal()
@@ -424,6 +425,29 @@ class DesktopWidget(QWidget):
                 break
         self._horizontal = horizontal
         self._transpose_frame()
+        self.orientation_changed.emit(horizontal)
+
+    def set_orientation_silent(self, horizontal: bool) -> None:
+        """Apply orientation on startup restore WITHOUT auto-transposing the
+        frame — the saved geometry already has the right w/h. Used by main.py
+        when restoring state, so we don't transpose an already-correct frame.
+        """
+        if horizontal == self._horizontal:
+            return
+        old = self._active_tiles_layout()
+        new = self.tiles_hbox if horizontal else self.tiles_vbox
+        for tile in list(self._tiles.values()):
+            old.removeWidget(tile)
+            new.addWidget(tile, stretch=1)
+        main = self.layout()
+        for i in range(main.count()):
+            item = main.itemAt(i)
+            if item is old or item.layout() is old:
+                main.removeItem(item)
+                main.insertLayout(i, new)
+                break
+        self._horizontal = horizontal
+        # No transpose, no signal — this is a restore, not a user action.
 
     def _nearest_docked_edge(self) -> str | None:
         """Return 'top'|'bottom'|'left'|'right' if the frame touches that edge."""

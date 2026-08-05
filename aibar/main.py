@@ -109,12 +109,17 @@ class AIBarApp:
         self.widget.dashboard_requested.connect(self.show_dashboard_at_widget)
         self.widget.quit_requested.connect(app.quit)
         self.widget.geometry_changed.connect(self.save_widget_geometry)
+        self.widget.orientation_changed.connect(self.on_orientation_changed)
+        # Restore the full saved state: size + position + orientation + mode.
         geometry = self.cfg.get("widget_geometry")
         if geometry and len(geometry) == 4:
             x, y, w, h = geometry
             # Restore size + position (clamp position to the screen).
             self.widget.resize(int(w), int(h))
             self.widget.move(self.widget._clamp_to_screen(QPoint(int(x), int(y))))
+            # Restore orientation silently — saved geometry already has the
+            # right w/h, so we must NOT transpose the frame here.
+            self.widget.set_orientation_silent(bool(self.cfg.get("widget_horizontal", False)))
         else:
             screen = app.primaryScreen().availableGeometry()
             self.widget.move(screen.right() - self.widget.width() - 16, screen.top() + 60)
@@ -124,6 +129,10 @@ class AIBarApp:
         self.widget.set_hide_on_idle(bool(self.cfg.get("widget_hide_on_idle", False)))
         if self.cfg.get("widget_enabled", True):
             self.widget.show()
+
+        # Flush any pending geometry on clean exit — the 800ms debounce timer
+        # may not have fired yet when the user quits via tray / window close.
+        app.aboutToQuit.connect(self.flush_state_on_quit)
 
         self.tray = QSystemTrayIcon(render_tray_icon(None, None))
         self.tray.setToolTip(f"AIBar v{__version__} — загрузка…")
@@ -334,6 +343,36 @@ class AIBarApp:
     def save_widget_geometry(self) -> None:
         geo = self.widget.geometry()
         self.cfg["widget_geometry"] = [geo.x(), geo.y(), geo.width(), geo.height()]
+        # Persist orientation too — it may have changed without a geometry
+        # signal (e.g. the user dragged to an edge that snapped the layout
+        # but produced the same frame size).
+        self.cfg["widget_horizontal"] = bool(getattr(self.widget, "_horizontal", False))
+        config.save(self.cfg)
+
+    def on_orientation_changed(self, horizontal: bool) -> None:
+        """Persist orientation flips triggered by edge-snapping or manual drag."""
+        self.cfg["widget_horizontal"] = bool(horizontal)
+        config.save(self.cfg)
+
+    def flush_state_on_quit(self) -> None:
+        """aboutToQuit hook: force-flush the latest widget geometry that the
+        800ms debounce timer may not have written yet. Without this, the last
+        move/resize within 800ms of quitting is lost on next launch.
+        """
+        # Stop the debounce timer so it can't fire during teardown.
+        if hasattr(self.widget, "_geometry_timer"):
+            self.widget._geometry_timer.stop()
+        # If the widget is mid-slide (hidden off-screen), use its docked
+        # (visible) position rather than the transient off-screen frame.
+        if getattr(self.widget, "_hidden", False) and self.widget._docked_pos is not None:
+            geo = self.widget._docked_pos
+            self.cfg["widget_geometry"] = [
+                geo.x(), geo.y(), self.widget.width(), self.widget.height()
+            ]
+        else:
+            g = self.widget.geometry()
+            self.cfg["widget_geometry"] = [g.x(), g.y(), g.width(), g.height()]
+        self.cfg["widget_horizontal"] = bool(getattr(self.widget, "_horizontal", False))
         config.save(self.cfg)
 
     def set_interval(self, seconds: int) -> None:
