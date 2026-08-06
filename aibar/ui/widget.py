@@ -19,6 +19,7 @@ from .badges import UpdateBadge, VpnBadge
 from .edge_collapse import EdgeCollapse, docked_edge, flush_pos
 from .hover_panel import WIDGET_FLAGS, HoverPanel
 from .tiles import GaugeTile, soonest_countdown
+from .topmost import TopmostKeeper
 
 # Полоса у края рамки, за которую её тянут; центр остаётся зоной перетаскивания.
 RESIZE_MARGIN = 8
@@ -109,6 +110,12 @@ class DesktopWidget(QWidget):
         self.collapse = EdgeCollapse(self, keep_open=self._panel_holds_cursor)
         self.collapse.collapsed.connect(self._on_collapsed)
         self.collapse.expanded.connect(self._on_expanded)
+
+        # Флага «поверх всех» хватает до первого чужого окна в верхнем слое —
+        # дальше порядок возвращаем сами, иначе полоску свёрнутого виджета
+        # накрывает и развернуть его нечем. Панель поднимается после виджета.
+        self.topmost = TopmostKeeper(self, self.panel)
+        self.collapse.collapsed.connect(self.topmost.reassert)
 
     # ---- data -----------------------------------------------------------
     def update_snapshots(self, snapshots: list[ProviderSnapshot]) -> None:
