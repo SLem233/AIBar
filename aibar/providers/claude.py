@@ -38,6 +38,18 @@ TIMEOUT = 30
 # Обновляем токен заранее: за минуту до истечения он уже считается протухшим.
 EXPIRY_MARGIN_MS = 60_000
 
+# Anthropic ограничивает частоту обращений к /usage и отдаёт 429 с Retry-After
+# (наблюдалось ~27 минут). Пауза соблюдается, иначе опрос раз в минуту так и
+# будет упираться в лимит и держать кольцо пустым.
+DEFAULT_RETRY_AFTER = 15 * 60
+MAX_RETRY_AFTER = 60 * 60  # потолок: кривой заголовок не должен заморозить опрос
+_retry_until = 0.0
+
+# Тариф меняется от силы раз в месяц, а запрос к /profile удваивал трафик к
+# эндпоинтам, которые нас и ограничивают. Держим ответ час.
+PROFILE_TTL = 3600
+_profile_cache: tuple[float, str, dict] | None = None
+
 RELOGIN_HINT = "обновите вход: запустите claude или Claude Desktop и залогиньтесь"
 
 # (json key, human label) in display order; first two feed the tray gauge
@@ -151,6 +163,26 @@ def _refresh(cred: Path, oauth: dict) -> str:
         raise RuntimeError(f"refresh-токен истёк или отозван — {RELOGIN_HINT}") from None
 
 
+# ---- ограничение частоты --------------------------------------------------
+def _retry_after_seconds(resp) -> float:
+    """Пауза из заголовка Retry-After, зажатая в разумные рамки."""
+    try:
+        delay = float(str((resp.headers or {}).get("Retry-After", "")).strip())
+    except (AttributeError, TypeError, ValueError):
+        delay = DEFAULT_RETRY_AFTER  # заголовка нет или это HTTP-дата
+    if delay <= 0:
+        delay = DEFAULT_RETRY_AFTER
+    return min(delay, MAX_RETRY_AFTER)
+
+
+def _rate_limit_message(seconds: float) -> str:
+    minutes = max(1, int(seconds // 60))
+    return (
+        f"Anthropic ограничил частоту опроса лимитов, повтор через ~{minutes} мин. "
+        "Помогает больший интервал обновления в настройках."
+    )
+
+
 # ---- запросы --------------------------------------------------------------
 def _headers(token: str) -> dict:
     return {
@@ -162,6 +194,7 @@ def _headers(token: str) -> dict:
 
 
 def fetch(cfg: dict | None = None) -> ProviderSnapshot:
+    global _retry_until
     snap = ProviderSnapshot(provider="Claude")
     try:
         cred, oauth = _load_oauth()
@@ -179,6 +212,14 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
 
     snap.plan = (oauth.get("subscriptionType") or "").capitalize()
     auto_refresh = bool((cfg or {}).get("claude_auto_refresh", True))
+
+    # Нас уже попросили не приходить какое-то время — молчим до срока. Кольца
+    # при этом не гаснут: poll_all подставит последние удачные значения.
+    remaining = _retry_until - time.time()
+    if remaining > 0:
+        snap.http_status = 429
+        snap.error = _rate_limit_message(remaining)
+        return snap
 
     # Claude Desktop не обновляет токен сам — делаем это за него.
     if auto_refresh and _token_expired(oauth):
@@ -214,6 +255,13 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
             "Токен истёк — запустите claude и отправьте любой запрос, "
             "токен обновится сам"
         )
+        return snap
+    if resp.status_code == 429:
+        # Не ошибка входа и не повод ротировать одноразовый refresh-токен:
+        # запоминаем срок и до него сюда не ходим.
+        delay = _retry_after_seconds(resp)
+        _retry_until = time.time() + delay
+        snap.error = _rate_limit_message(delay)
         return snap
     if resp.status_code != 200:
         snap.error = f"HTTP {resp.status_code}"
@@ -258,17 +306,33 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
 
 
 def _apply_profile(snap: ProviderSnapshot, headers: dict) -> None:
-    """Exact plan tier (e.g. Max 5x) and subscription status from the profile."""
-    try:
-        resp = requests.get(PROFILE_URL, headers=dict(headers), timeout=15)
-        if resp.status_code != 200:
-            return
-        org = resp.json().get("organization") or {}
-    except (requests.RequestException, ValueError, AttributeError):
-        return
+    """Exact plan tier (e.g. Max 5x) and subscription status from the profile.
 
-    tier = org.get("rate_limit_tier") or ""  # e.g. default_claude_max_5x
-    if "max_" in tier:
-        snap.plan = "Max " + tier.rsplit("_", 1)[-1]
-    if org.get("subscription_status") and org["subscription_status"] != "active":
-        snap.extra["Статус подписки"] = org["subscription_status"]
+    Ответ живёт в кэше час: тариф меняется несопоставимо реже, чем идёт опрос, а
+    лишний запрос к тем же ограниченным по частоте эндпоинтам ровно удваивал
+    нагрузку. Неудачную попытку не кэшируем — повторим в следующий цикл.
+    """
+    global _profile_cache
+    now = time.time()
+    if _profile_cache and now - _profile_cache[0] < PROFILE_TTL:
+        _, plan, extra = _profile_cache
+    else:
+        try:
+            resp = requests.get(PROFILE_URL, headers=dict(headers), timeout=15)
+            if resp.status_code != 200:
+                return
+            org = resp.json().get("organization") or {}
+        except (requests.RequestException, ValueError, AttributeError):
+            return
+
+        plan, extra = "", {}
+        tier = org.get("rate_limit_tier") or ""  # e.g. default_claude_max_5x
+        if "max_" in tier:
+            plan = "Max " + tier.rsplit("_", 1)[-1]
+        if org.get("subscription_status") and org["subscription_status"] != "active":
+            extra["Статус подписки"] = org["subscription_status"]
+        _profile_cache = (now, plan, extra)
+
+    if plan:
+        snap.plan = plan
+    snap.extra.update(extra)

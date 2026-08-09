@@ -1,7 +1,16 @@
-"""poll_all: pause gated providers on geo-block, keep last good data."""
+"""poll_all: pause gated providers on geo-block, keep last good data.
+
+Сюда же — удержание последних значений при обычной ошибке опроса (429 от
+Anthropic, 5xx, обрыв сети). Раньше `last_good` читался только ради гео-блока, и
+любая транзиентная ошибка гасила кольцо до прочерка, хотя годные данные лежали
+в памяти. Правило проекта: молча обнулять нельзя.
+"""
+
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
 from aibar.geoblock import GeoBlockGuard
-from aibar.polling import poll_all
+from aibar.polling import STALE_MAX_AGE_SECONDS, poll_all
 from aibar.providers.base import ProviderSnapshot, RateWindow
 
 
@@ -181,3 +190,115 @@ def test_fetch_exception_becomes_error_snapshot():
 def test_unknown_provider_names_are_skipped():
     snaps = poll_all({"providers": ["Nope"]}, make_guard(401), {}, registry={})
     assert snaps == []
+
+
+# ---- удержание последних значений при ошибке опроса -------------------------
+class ScriptedFetch:
+    """Отдаёт снапшоты по списку, последний повторяется."""
+
+    def __init__(self, *snapshots):
+        self.snapshots = list(snapshots)
+        self.calls = 0
+
+    def __call__(self, cfg):
+        snap = self.snapshots[min(self.calls, len(self.snapshots) - 1)]
+        self.calls += 1
+        return snap
+
+
+def error_snapshot(name="Claude", error="HTTP 429", status=429):
+    return ProviderSnapshot(provider=name, error=error, http_status=status)
+
+
+def run_cycles(fetch, count=2, cfg=None):
+    """Прогнать N циклов опроса через общий last_good, вернуть последний снапшот."""
+    cfg = cfg or {"providers": ["Claude"]}
+    last_good, snaps = {}, []
+    for _ in range(count):
+        snaps = poll_all(cfg, make_guard(401), last_good, registry={"Claude": fetch})
+    return snaps[0], last_good
+
+
+def test_rate_limit_error_keeps_the_last_good_rings():
+    snap, _ = run_cycles(ScriptedFetch(good_snapshot(percent=61.0), error_snapshot()))
+
+    assert snap.session_percent == 61.0  # кольцо держит последнее значение
+    assert snap.stale is True  # но данные помечены как несвежие
+    assert snap.error == "HTTP 429"  # и ошибка не спрятана
+    assert snap.paused is False  # это не гео-блок
+
+
+def test_network_error_without_status_also_keeps_the_rings():
+    fetch = ScriptedFetch(
+        good_snapshot(percent=17.0),
+        error_snapshot(error="Сетевая ошибка: timeout", status=None),
+    )
+    snap, _ = run_cycles(fetch)
+
+    assert snap.session_percent == 17.0
+    assert snap.stale is True
+
+
+def test_repeated_errors_keep_showing_the_same_last_good_data():
+    fetch = ScriptedFetch(good_snapshot(percent=48.0), error_snapshot())
+    snap, last_good = run_cycles(fetch, count=5)
+
+    assert fetch.calls == 5
+    assert snap.session_percent == 48.0
+    assert last_good["Claude"].session_percent == 48.0  # ошибка не затёрла эталон
+
+
+def test_recovery_replaces_stale_data_and_clears_the_flag():
+    fetch = ScriptedFetch(
+        good_snapshot(percent=48.0), error_snapshot(), good_snapshot(percent=52.0)
+    )
+    snap, _ = run_cycles(fetch, count=3)
+
+    assert snap.session_percent == 52.0
+    assert snap.stale is False
+    assert snap.error is None
+
+
+def test_error_on_the_very_first_cycle_has_nothing_to_show():
+    """Ничего удачного ещё не приходило — выдумывать нули нельзя."""
+    snap, _ = run_cycles(ScriptedFetch(error_snapshot()), count=1)
+
+    assert snap.windows == []
+    assert snap.stale is False
+    assert snap.error == "HTTP 429"
+
+
+def test_ancient_data_is_not_resurrected():
+    """Через сутки простоя старые проценты — уже дезинформация."""
+    fetch = ScriptedFetch(good_snapshot(percent=61.0), error_snapshot())
+    cfg = {"providers": ["Claude"]}
+    guard = make_guard(401)
+    last_good = {}
+
+    poll_all(cfg, guard, last_good, registry={"Claude": fetch})
+    stale_at = datetime.now(timezone.utc) - timedelta(
+        seconds=STALE_MAX_AGE_SECONDS + 60
+    )
+    last_good["Claude"] = replace(last_good["Claude"], fetched_at=stale_at)
+    snaps = poll_all(cfg, guard, last_good, registry={"Claude": fetch})
+
+    assert snaps[0].windows == []
+    assert snaps[0].stale is False
+    assert snaps[0].error == "HTTP 429"
+
+
+def test_geo_block_still_wins_over_the_stale_path():
+    """403 остаётся паузой: значок ⏸ и без текста ошибки."""
+    fetch = ScriptedFetch(good_snapshot(percent=30.0))
+    status = {"value": 401}
+    guard = GeoBlockGuard(probe=lambda url: status["value"])
+    cfg, last_good = {"providers": ["Claude"]}, {}
+
+    poll_all(cfg, guard, last_good, registry={"Claude": fetch})
+    status["value"] = 403
+    snaps = poll_all(cfg, guard, last_good, registry={"Claude": fetch})
+
+    assert snaps[0].paused is True
+    assert snaps[0].stale is False
+    assert snaps[0].error is None
+    assert snaps[0].session_percent == 30.0
