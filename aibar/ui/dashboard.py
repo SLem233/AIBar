@@ -90,7 +90,9 @@ class ProviderCard(QFrame):
             error.setWordWrap(True)
             error.setStyleSheet(f"color: {theme.WARNING};")
             self.rows.addWidget(error, 0, 0, 1, 3)
-            return
+            if not snap.stale:
+                return
+            # fall through: последние удачные значения ниже остаются на виду
 
         for i, window in enumerate(snap.windows):
             chip = CHIP.format(color=theme.RING_COLORS[i]) if i < 3 else "·"

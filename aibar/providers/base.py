@@ -43,6 +43,7 @@ class ProviderSnapshot:
     error: str | None = None
     http_status: int | None = None  # status of a failed fetch (403 -> geo check)
     paused: bool = False  # geo-blocked (no VPN): windows hold last good data
+    stale: bool = False  # fetch failed: windows hold last good data, error shown
     fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
