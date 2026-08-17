@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -18,7 +19,28 @@ from ..geoblock import PAUSED_MESSAGE
 from ..providers.base import ProviderSnapshot
 from .gauge import RadialGauge
 
-CHIP = '<span style="color:{color}; font-size:14px;">●</span>'
+CHIP = '<span style="color:{color}; font-size:13px;">●</span>'
+
+# Плотность карточки. Провайдеров уже одиннадцать, и высота окна упирается в
+# экран, поэтому кольцо и поля ужаты до предела, за которым кольцо перестаёт
+# читаться: три дорожки по 6 px плюс проценты в центре.
+GAUGE_SIZE = 72
+
+# Отступ от края экрана, который окно оставляет себе сверху и снизу.
+SCREEN_MARGIN = 16
+# Ниже этого списка карточек прокручивать уже нечего — окно просто маленькое.
+MIN_CARDS_HEIGHT = 120
+
+
+def cards_viewport_height(content: int, chrome: int, screen: int) -> int:
+    """Высота видимой части списка карточек.
+
+    Столько, сколько просит содержимое, но не выше остатка экрана после шапки,
+    подвала и полей. Экран меньше минимума (или неизвестен) — отдаём минимум:
+    лучше окно с прокруткой, чем окно нулевой высоты.
+    """
+    ceiling = screen - 2 * SCREEN_MARGIN - chrome
+    return max(MIN_CARDS_HEIGHT, min(content, ceiling))
 
 
 class ProviderCard(QFrame):
@@ -26,16 +48,16 @@ class ProviderCard(QFrame):
         super().__init__(parent)
         self.setObjectName("card")
 
-        self.gauge = RadialGauge(size=96)
+        self.gauge = RadialGauge(size=GAUGE_SIZE)
         self.title = QLabel()
         self.title.setObjectName("cardTitle")
         self.plan = QLabel()
         self.plan.setObjectName("cardPlan")
 
         self.rows = QGridLayout()
-        self.rows.setContentsMargins(0, 6, 0, 0)
+        self.rows.setContentsMargins(0, 2, 0, 0)
         self.rows.setHorizontalSpacing(10)
-        self.rows.setVerticalSpacing(4)
+        self.rows.setVerticalSpacing(1)
         self.rows.setColumnStretch(0, 1)  # label column absorbs width changes
 
         head = QHBoxLayout()
@@ -44,13 +66,14 @@ class ProviderCard(QFrame):
         head.addWidget(self.plan)
 
         right = QVBoxLayout()
+        right.setSpacing(0)
         right.addLayout(head)
         right.addLayout(self.rows)
         right.addStretch()
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(14)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(12)
         layout.addWidget(self.gauge, alignment=Qt.AlignTop)
         layout.addLayout(right, stretch=1)
 
@@ -126,14 +149,18 @@ class DashboardWindow(QWidget):
                 border: 1px solid {theme.BORDER};
                 border-radius: 10px;
             }}
-            QLabel {{ color: {theme.TEXT_SECONDARY}; font-family: "{theme.FONT_FAMILY}"; }}
+            QLabel {{
+                color: {theme.TEXT_SECONDARY};
+                font-family: "{theme.FONT_FAMILY}";
+                font-size: 12px;
+            }}
             #card {{
                 background: {theme.SURFACE};
                 border: 1px solid {theme.BORDER};
                 border-radius: 10px;
             }}
-            #cardTitle {{ color: {theme.TEXT_PRIMARY}; font-size: 15px; font-weight: 600; }}
-            #cardPlan {{ color: {theme.TEXT_MUTED}; font-size: 12px; }}
+            #cardTitle {{ color: {theme.TEXT_PRIMARY}; font-size: 14px; font-weight: 600; }}
+            #cardPlan {{ color: {theme.TEXT_MUTED}; font-size: 11px; }}
             #header {{ color: {theme.TEXT_PRIMARY}; font-size: 14px; font-weight: 600; }}
             #footer {{ color: {theme.TEXT_MUTED}; font-size: 11px; }}
             QPushButton {{
@@ -144,32 +171,87 @@ class DashboardWindow(QWidget):
                 padding: 4px 10px;
             }}
             QPushButton:hover {{ color: {theme.TEXT_PRIMARY}; border-color: {theme.TEXT_MUTED}; }}
+            #cards {{ background: transparent; }}
+            QScrollArea {{ background: transparent; border: none; }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 8px;
+                margin: 0;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {theme.TEXT_MUTED};
+                border-radius: 4px;
+                min-height: 32px;
+            }}
+            QScrollBar::handle:vertical:hover {{ background: {theme.TEXT_SECONDARY}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: transparent;
+            }}
             """
         )
 
-        header = QLabel("Лимиты AI-провайдеров")
-        header.setObjectName("header")
+        self.header = QLabel("Лимиты AI-провайдеров")
+        self.header.setObjectName("header")
         self.refresh_btn = QPushButton("Обновить")
         self.refresh_btn.clicked.connect(self.refresh_requested)
 
         top = QHBoxLayout()
-        top.addWidget(header)
+        top.addWidget(self.header)
         top.addStretch()
         top.addWidget(self.refresh_btn)
 
-        self.cards_layout = QVBoxLayout()
-        self.cards_layout.setSpacing(8)
+        # Карточки живут в прокручиваемой области: их высота ограничена экраном,
+        # а шапка с кнопкой «Обновить» и подвал остаются на виду.
+        cards_host = QWidget()
+        cards_host.setObjectName("cards")
+        self.cards_layout = QVBoxLayout(cards_host)
+        self.cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.cards_layout.setSpacing(6)
         self._cards: dict[str, ProviderCard] = {}
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidget(cards_host)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.viewport().setAutoFillBackground(False)
+        self._cards_host = cards_host
 
         self.footer = QLabel("")
         self.footer.setObjectName("footer")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 10)
-        layout.setSpacing(10)
+        layout.setContentsMargins(10, 10, 10, 8)
+        layout.setSpacing(8)
         layout.addLayout(top)
-        layout.addLayout(self.cards_layout)
+        layout.addWidget(self.scroll)
         layout.addWidget(self.footer)
+
+    def _chrome_height(self) -> int:
+        """Высота всего, кроме списка карточек: поля, шапка, подвал."""
+        margins = self.layout().contentsMargins()
+        head = max(self.header.sizeHint().height(), self.refresh_btn.sizeHint().height())
+        return (
+            margins.top()
+            + margins.bottom()
+            + 2 * self.layout().spacing()
+            + head
+            + self.footer.sizeHint().height()
+        )
+
+    def _screen_height(self) -> int:
+        screen = self.screen()
+        return screen.availableGeometry().height() if screen else 0
+
+    def fit_to_screen(self) -> None:
+        """Подогнать окно: список карточек не выше того, что даёт экран."""
+        self._cards_host.adjustSize()  # sizeHint по свежим карточкам, а не по прошлым
+        height = cards_viewport_height(
+            self._cards_host.sizeHint().height(), self._chrome_height(), self._screen_height()
+        )
+        self.scroll.setFixedHeight(height)
+        self.adjustSize()
 
     def update_snapshots(self, snapshots: list[ProviderSnapshot]) -> None:
         for snap in snapshots:
@@ -182,7 +264,7 @@ class DashboardWindow(QWidget):
         self.footer.setText(
             f"AIBar v{__version__} · Обновлено {datetime.now().strftime('%H:%M:%S')}"
         )
-        self.adjustSize()
+        self.fit_to_screen()
 
     def clear_cards(self) -> None:
         for card in self._cards.values():
@@ -191,7 +273,7 @@ class DashboardWindow(QWidget):
         self._cards.clear()
 
     def show_at(self, x: int, y: int) -> None:
-        self.adjustSize()
+        self.fit_to_screen()
         screen = self.screen().availableGeometry()
         x = min(max(x - self.width() // 2, screen.left() + 8), screen.right() - self.width() - 8)
         y = min(y, screen.bottom() - self.height() - 8)

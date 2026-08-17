@@ -125,6 +125,122 @@ def test_zero_limit_gives_no_window():
     assert not snap.windows
 
 
+# ---- unified billing ------------------------------------------------------
+# С августа 2026 xAI отдаёт не деньги за период, а процент от общего пула:
+# `monthlyLimit`/`used` исчезли, вместо них `creditUsagePercent` и
+# `currentPeriod`. Образец снят с ответа, который получил сам grok CLI 1.0.4
+# (~/.grok/logs/unified.jsonl, «billing: fetched credits config»).
+def unified(percent=4.0, period="USAGE_PERIOD_TYPE_WEEKLY",
+            start="2026-08-13T18:38:30.938252+00:00",
+            end="2026-08-20T18:38:30.938252+00:00",
+            on_demand_cap=0, on_demand_used=0, prepaid=0):
+    return {
+        "config": {
+            "creditUsagePercent": percent,
+            "currentPeriod": {"type": period, "start": start, "end": end},
+            "onDemandCap": {"val": on_demand_cap},
+            "onDemandUsed": {"val": on_demand_used},
+            "prepaidBalance": {"val": prepaid},
+            "isUnifiedBillingUser": True,
+            "billingPeriodStart": start,
+            "billingPeriodEnd": end,
+            "historyLen": 0,
+        },
+        "onDemandEnabled": None,
+        "subscriptionTier": "SuperGrok",
+    }
+
+
+def test_unified_percent_becomes_the_weekly_window():
+    snap = ProviderSnapshot(provider="Grok")
+    grok._apply_billing(snap, unified(percent=4.0)["config"])
+    assert snap.windows[0].used_percent == pytest.approx(4.0)
+    assert snap.windows[0].label == "Неделя"
+    assert snap.windows[0].resets_at.day == 20
+
+
+def test_unified_monthly_period_is_labelled_monthly():
+    snap = ProviderSnapshot(provider="Grok")
+    config = unified(period="USAGE_PERIOD_TYPE_MONTHLY",
+                     start="2026-08-01T00:00:00+00:00",
+                     end="2026-09-01T00:00:00+00:00")["config"]
+    grok._apply_billing(snap, config)
+    assert snap.windows[0].label == "Месяц"
+
+
+def test_unified_period_of_unknown_type_falls_back_to_its_length():
+    snap = ProviderSnapshot(provider="Grok")
+    config = unified(period="USAGE_PERIOD_TYPE_UNSPECIFIED")["config"]
+    grok._apply_billing(snap, config)
+    assert snap.windows[0].label == "Неделя"
+
+
+def test_unified_zero_percent_is_still_a_window():
+    """Ноль расхода — это ноль, а не «данных нет»: кольцо должно быть пустым."""
+    snap = ProviderSnapshot(provider="Grok")
+    grok._apply_billing(snap, unified(percent=0)["config"])
+    assert snap.windows and snap.windows[0].used_percent == 0
+
+
+def test_unified_shows_payg_and_prepaid_only_when_they_exist():
+    lean = ProviderSnapshot(provider="Grok")
+    grok._apply_billing(lean, unified()["config"])
+    assert "PAYG" not in lean.extra and "Предоплата" not in lean.extra
+
+    rich = ProviderSnapshot(provider="Grok")
+    grok._apply_billing(rich, unified(on_demand_cap=5000, on_demand_used=1200,
+                                      prepaid=750)["config"])
+    assert rich.extra["PAYG"] == "$12.00 / $50.00"
+    assert rich.extra["Предоплата"] == "$7.50"
+
+
+def test_subscription_tier_becomes_the_plan(monkeypatch, auth):
+    auth(expired=False)
+    monkeypatch.setattr(grok.requests, "get", oidc_get(FakeResp(200, payload=unified())))
+    monkeypatch.setattr(grok.requests, "post", lambda *a, **kw: FakeResp(200, {}))
+    snap = grok.fetch({})
+    assert snap.error is None
+    assert snap.plan == "SuperGrok"
+    assert snap.windows[0].used_percent == pytest.approx(4.0)
+
+
+def test_live_answer_on_a_pooled_subscription_is_an_honest_dash(monkeypatch, auth):
+    """Что ручка отдаёт на самом деле (снято 17.08.2026, подписка SuperGrok).
+
+    Лимит и история нулевые, процента нет. Ноль расхода и отсутствие данных
+    выглядят одинаково, поэтому рисовать 0% нельзя — нужен прочерк с ошибкой.
+    """
+    auth(expired=False)
+    live = {
+        "config": {
+            "monthlyLimit": {"val": 0},
+            "used": {"val": 0},
+            "onDemandCap": {"val": 0},
+            "billingPeriodStart": "2026-08-01T00:00:00+00:00",
+            "billingPeriodEnd": "2026-09-01T00:00:00+00:00",
+            "history": [
+                {"billingCycle": {"year": 2026, "month": m},
+                 "includedUsed": {"val": 0}, "onDemandUsed": {"val": 0},
+                 "totalUsed": {"val": 0}}
+                for m in (7, 6, 5)
+            ],
+        }
+    }
+    monkeypatch.setattr(grok.requests, "get", oidc_get(FakeResp(200, payload=live)))
+    monkeypatch.setattr(grok.requests, "post", lambda *a, **kw: FakeResp(200, {}))
+    snap = grok.fetch({})
+    assert snap.windows == []
+    assert snap.error and "/usage" in snap.error
+
+
+def test_old_money_shape_still_works_after_the_switch():
+    """Аккаунты без unified billing никуда не делись — старый разбор оставлен."""
+    snap = ProviderSnapshot(provider="Grok")
+    grok._apply_billing(snap, billing()["config"])
+    assert snap.windows[0].label == "Мес. (списание)"
+    assert snap.extra["Списание"] == "$19.74 / $200.00"
+
+
 def test_prepaid_pool_is_shown_separately():
     snap = ProviderSnapshot(provider="Grok")
     grok._apply_billing(snap, billing(on_demand_cap=5000)["config"])

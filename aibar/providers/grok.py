@@ -1,15 +1,36 @@
-"""Grok (xAI) usage provider — окно списания подписки.
+"""Grok (xAI) usage provider — окно расхода подписки.
 
-Что откуда берётся (проверено на живом аккаунте, см. tests/test_grok.py):
+Читается `GET https://cli-chat-proxy.grok.com/v1/billing`. Ответ разбирается в
+одной из двух схем:
 
-* «Weekly limit: N%» из `grok` TUI снаружи не читается: это JSON-RPC
-  `auth/check_subscription` по WebSocket-реле `wss://code.grok.com/ws/code-agent`,
-  которое чужому bearer отвечает «3000 Unauthorized».
-* Заголовков `x-ratelimit-*` у чат-эндпоинта нет вовсе, поэтому проба чатом
-  всегда возвращала 0% — этот путь в форке был ошибкой и сюда не переносился.
-* Читается `GET https://cli-chat-proxy.grok.com/v1/billing`: расход и лимит
-  за расчётный период (в центах) плюс его границы. Это и есть «Monthly limit»
-  из TUI; конец периода даёт обратный отсчёт.
+* **денежная**: `monthlyLimit` и `used` в центах за расчётный период. Это то,
+  что ручка отдаёт сейчас.
+* **unified billing**: `creditUsagePercent` — процент израсходованного пула — и
+  `currentPeriod` с типом окна и границами. Это и есть «Weekly limit: N%» из
+  TUI.
+
+Схему различаем по наличию `creditUsagePercent`, а не по `isUnifiedBillingUser`:
+процент — это то, что рисуется, и решать должно наличие самих данных.
+
+Оговорка, стоившая разведки 17.08.2026. Образец unified-ответа снят не с нашего
+запроса, а с лога самого CLI (`~/.grok/logs/unified.jsonl`, строка «billing:
+fetched credits config»). По HTTP этих полей не отдают: на аккаунте с активной
+подпиской SuperGrok `/v1/billing` возвращает денежную схему с нулевым лимитом и
+нулевой историей. Перебраны `/v1` и `/v2` на cli-chat-proxy, `api.x.ai/v1`,
+`grok.com/rest`, полтора десятка путей, POST вместо GET, заголовок и путь от
+лица команды — везде 404, живые только `/v1/billing` и `/v1/user`. Версия
+клиента в заголовках роли не играет: ответы с `grok-cli/0.2.118` и
+`grok-cli/1.0.4` побайтово совпадают.
+
+Отсюда рабочая версия: unified-данные CLI получает по WebSocket-реле
+(`auth/check_subscription`), которое чужому bearer отвечает «3000
+Unauthorized», — в логе строка идёт без URL, а конверт ответа отличается от
+HTTP-шного. Поэтому разбор unified оставлен как есть: схема настоящая, снята с
+живого ответа xAI, и включится сама, если ручку однажды откроют. Но пока карточка
+на таком аккаунте честно показывает ошибку, а не выдуманный процент.
+
+Чат-эндпоинт не пробуем: заголовков `x-ratelimit-*` у него нет, проба всегда
+возвращала 0%.
 
 Токен берётся из `~/.grok/auth.json` (вход через grok CLI) и обновляется по
 OIDC, поэтому запускать CLI ради свежего токена не нужно. Обмен выключается
@@ -42,10 +63,15 @@ AUTH_KEY_PREFIX = "https://auth.x.ai::"
 EXPIRY_MARGIN_S = 120
 
 LOGIN_HINT = "войдите через grok CLI"
-RELAY_HINT = (
-    "недельное окно подписки видно только внутри grok TUI — откройте `grok` "
-    "и наберите /usage"
-)
+TUI_HINT = "остаток покажет `grok` командой /usage"
+
+# Тип окна из currentPeriod. Список неполный намеренно: неизвестный тип уводим
+# в определение по длине периода, а не в «Подписка».
+PERIOD_LABELS = {
+    "USAGE_PERIOD_TYPE_DAILY": "Сутки",
+    "USAGE_PERIOD_TYPE_WEEKLY": "Неделя",
+    "USAGE_PERIOD_TYPE_MONTHLY": "Месяц",
+}
 
 
 # ---- файл с токеном -------------------------------------------------------
@@ -148,21 +174,60 @@ def _headers(token: str) -> dict:
     }
 
 
-def _period_label(start_iso: str | None, end_iso: str | None) -> str:
+def _money(cents: float) -> str:
+    return f"${cents / 100:.2f}"
+
+
+def _period_by_length(start_iso: str | None, end_iso: str | None) -> str:
     """Название окна по длине расчётного периода."""
     start, end = parse_iso8601(start_iso), parse_iso8601(end_iso)
     if start is None or end is None:
         return "Подписка"
     days = (end - start).total_seconds() / 86400
     if 6 <= days <= 8:
-        return "Неделя (списание)"
+        return "Неделя"
     if 27 <= days <= 33:
-        return "Мес. (списание)"
+        return "Месяц"
     return "Подписка"
+
+
+def _period_label(start_iso: str | None, end_iso: str | None) -> str:
+    """То же для денежной схемы: там окно — это списание, а не квота."""
+    spend_labels = {"Неделя": "Неделя (списание)", "Месяц": "Мес. (списание)"}
+    return spend_labels.get(_period_by_length(start_iso, end_iso), "Подписка")
+
+
+def _apply_unified(snap: ProviderSnapshot, config: dict) -> bool:
+    """Схема unified billing: процент пула. False — если её признаков нет."""
+    percent = config.get("creditUsagePercent")
+    if percent is None:
+        return False
+    period = config.get("currentPeriod") or {}
+    start = period.get("start") or config.get("billingPeriodStart")
+    end = period.get("end") or config.get("billingPeriodEnd")
+    snap.windows.append(
+        RateWindow(
+            PERIOD_LABELS.get(period.get("type") or "") or _period_by_length(start, end),
+            max(0.0, min(100.0, float(percent))),
+            resets_at=parse_iso8601(end),
+        )
+    )
+    # Строки ниже показываем только когда за ними стоят деньги: карточка и так
+    # тесная, а нули не сообщают ничего.
+    cap = (config.get("onDemandCap") or {}).get("val") or 0
+    if cap:
+        used = (config.get("onDemandUsed") or {}).get("val") or 0
+        snap.extra["PAYG"] = f"{_money(used)} / {_money(cap)}"
+    prepaid = (config.get("prepaidBalance") or {}).get("val") or 0
+    if prepaid:
+        snap.extra["Предоплата"] = _money(prepaid)
+    return True
 
 
 def _apply_billing(snap: ProviderSnapshot, config: dict) -> None:
     """Блок config из /v1/billing → окно расхода. Суммы приходят в центах."""
+    if _apply_unified(snap, config):
+        return
     limit = (config.get("monthlyLimit") or {}).get("val")
     used = (config.get("used") or {}).get("val")
     if not limit or used is None:
@@ -175,10 +240,10 @@ def _apply_billing(snap: ProviderSnapshot, config: dict) -> None:
             resets_at=parse_iso8601(period_end),
         )
     )
-    snap.extra["Списание"] = f"${used / 100:.2f} / ${limit / 100:.2f}"
+    snap.extra["Списание"] = f"{_money(used)} / {_money(limit)}"
     on_demand_cap = (config.get("onDemandCap") or {}).get("val")
     if on_demand_cap:
-        snap.extra["PAYG"] = f"${on_demand_cap / 100:.2f}"
+        snap.extra["PAYG"] = _money(on_demand_cap)
 
 
 # ---- provider -------------------------------------------------------------
@@ -225,21 +290,26 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
         if resp.status_code == 401:
             snap.error = f"Grok не принял токен — {LOGIN_HINT}"
         elif resp.status_code >= 500:
-            snap.error = f"Grok: биллинг не отвечает (HTTP {resp.status_code}), {RELAY_HINT}"
+            snap.error = f"Grok: биллинг не отвечает (HTTP {resp.status_code}), {TUI_HINT}"
         else:
             snap.error = f"HTTP {resp.status_code}"
         return snap
 
     try:
-        config = (resp.json() or {}).get("config") or {}
+        body = resp.json() or {}
     except ValueError:
         snap.error = "Невалидный JSON в ответе Grok"
         return snap
 
-    _apply_billing(snap, config)
+    _apply_billing(snap, body.get("config") or {})
+    tier = body.get("subscriptionTier")
+    if tier:
+        snap.plan = str(tier)
     renewal = subscription_renewal(cfg, "grok")
     if renewal:
         snap.extra["Продление"] = renewal
     if not snap.windows:
-        snap.error = f"Grok: биллинг вернул пустые данные, {RELAY_HINT}"
+        # Ни процента, ни лимита — значит формат снова поехал. Не молчим и не
+        # рисуем ноль: ноль расхода и отсутствие данных выглядят одинаково.
+        snap.error = f"Grok: в ответе биллинга нет ни процента, ни лимита — {TUI_HINT}"
     return snap
