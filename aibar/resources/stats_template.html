@@ -179,7 +179,7 @@ const fmtN = n => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
      полутора десятков проектов сплошные штрихи, лидер должен занимать строку. */
 const sharePct = (v, total) => total > 0 ? v / total * 100 : 0;
 const relPct = (v, max) => max > 0 ? v / max * 100 : 0;
-const agentName = a => a === 'claude-code' ? 'Claude Code' : a === 'codex' ? 'Codex' : a === 'cursor' ? 'Cursor' : a;
+const agentName = a => a === 'claude-code' ? 'Claude Code' : a === 'codex' ? 'Codex' : a === 'cursor' ? 'Cursor' : a === 'grok' ? 'Grok' : a;
 const fmtDay = ts => { const k = mskDay(ts); return k.slice(8, 10) + '.' + k.slice(5, 7) + '.' + k.slice(0, 4); };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 /* Имя проекта → ссылка на его HTML-карточку рядом (если карточка есть).

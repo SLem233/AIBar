@@ -227,6 +227,7 @@ def test_template_has_no_hardcoded_agent_matrix(ledger, tmp_path):
     text = out.read_text(encoding="utf-8")
     assert 'text-align:right;">Codex</th>' not in text  # колонки не захардкожены
     assert "'cursor' ? 'Cursor'" in text  # человекочитаемое имя для Cursor
+    assert "'grok' ? 'Grok'" in text
 
 
 def test_outliers_since_is_embedded_and_filter_used(ledger, tmp_path):
