@@ -9,7 +9,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from aibar.providers.base import ProviderSnapshot, RateWindow
 from aibar.ui.dashboard import (
@@ -87,3 +87,62 @@ def test_window_shrinks_back_when_providers_are_few(app):
     win.update_snapshots([snapshot(f"P{i}") for i in range(2)])
     tall = win.height()
     assert tall < win.screen().availableGeometry().height() // 2
+
+
+def _label_with(card: ProviderCard, needle: str) -> QLabel:
+    for label in card.findChildren(QLabel):
+        if needle in label.text():
+            return label
+    raise AssertionError(f"нет подписи «{needle}»")
+
+
+def _bottom_in_card(card: ProviderCard, label: QLabel) -> int:
+    return label.mapTo(card, label.rect().bottomLeft()).y()
+
+
+def _laid_out(card: ProviderCard) -> None:
+    """Кольцо задаёт высоту короткой карточке — как в панели наведения."""
+    card.setFixedWidth(360)
+    card.adjustSize()
+    card.show()
+    QApplication.processEvents()
+
+
+def test_renewal_pins_to_bottom_on_a_short_card(app):
+    """Одно окно + «Продление»: дата у нижнего края рамки, не под кольцом."""
+    card = ProviderCard()
+    card.update_snapshot(
+        ProviderSnapshot(
+            provider="Grok",
+            plan="SuperGrok",
+            windows=[window("Неделя", 47, 33)],
+            extra={"Продление": "13.09.2026"},
+        )
+    )
+    _laid_out(card)
+    renewal = _label_with(card, "Продление")
+    week = _label_with(card, "Неделя")
+    assert card.height() - _bottom_in_card(card, renewal) <= 12
+    # Между окном и датой есть зазор — иначе дата снова прилипла к строкам.
+    assert _bottom_in_card(card, renewal) - _bottom_in_card(card, week) > 8
+
+
+def test_subscription_until_also_pins_to_bottom(app):
+    """У Codex та же роль у строки «Подписка до»."""
+    card = ProviderCard()
+    card.update_snapshot(
+        ProviderSnapshot(
+            provider="Codex",
+            plan="Plus",
+            windows=[window("Неделя", 59, 18)],
+            extra={"Кредиты": "0", "Подписка до": "13.09.2026"},
+        )
+    )
+    _laid_out(card)
+    sub = _label_with(card, "Подписка до")
+    credits = _label_with(card, "Кредиты")
+    week = _label_with(card, "Неделя")
+    assert card.height() - _bottom_in_card(card, sub) <= 12
+    # Кредиты остаются со строками лимитов, не уезжают в подвал.
+    assert _bottom_in_card(card, credits) - _bottom_in_card(card, week) <= 20
+    assert _bottom_in_card(card, sub) - _bottom_in_card(card, credits) > 8

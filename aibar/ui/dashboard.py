@@ -31,6 +31,10 @@ SCREEN_MARGIN = 16
 # Ниже этого списка карточек прокручивать уже нечего — окно просто маленькое.
 MIN_CARDS_HEIGHT = 120
 
+# Дата продления / конца подписки — в подвале карточки, у нижнего края рамки.
+# Остальные extra (кредиты, расход) остаются со строками окон.
+RENEWAL_KEYS = frozenset({"Продление", "Подписка до"})
+
 
 def cards_viewport_height(content: int, chrome: int, screen: int) -> int:
     """Высота видимой части списка карточек.
@@ -55,10 +59,12 @@ class ProviderCard(QFrame):
         self.plan.setObjectName("cardPlan")
 
         self.rows = QGridLayout()
-        self.rows.setContentsMargins(0, 2, 0, 0)
-        self.rows.setHorizontalSpacing(10)
-        self.rows.setVerticalSpacing(1)
-        self.rows.setColumnStretch(0, 1)  # label column absorbs width changes
+        self.footer_rows = QGridLayout()
+        for grid in (self.rows, self.footer_rows):
+            grid.setContentsMargins(0, 2, 0, 0)
+            grid.setHorizontalSpacing(10)
+            grid.setVerticalSpacing(1)
+            grid.setColumnStretch(0, 1)  # label column absorbs width changes
 
         head = QHBoxLayout()
         head.addWidget(self.title)
@@ -70,6 +76,7 @@ class ProviderCard(QFrame):
         right.addLayout(head)
         right.addLayout(self.rows)
         right.addStretch()
+        right.addLayout(self.footer_rows)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -77,14 +84,27 @@ class ProviderCard(QFrame):
         layout.addWidget(self.gauge, alignment=Qt.AlignTop)
         layout.addLayout(right, stretch=1)
 
-    def _clear_rows(self) -> None:
-        while self.rows.count():
-            item = self.rows.takeAt(0)
+    def _clear_grid(self, grid: QGridLayout) -> None:
+        while grid.count():
+            item = grid.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-    def _add_row(self, col0: str, col1: str = "", col2: str = "", tooltip: str = "") -> None:
-        row = self.rows.rowCount()
+    def _clear_rows(self) -> None:
+        self._clear_grid(self.rows)
+        self._clear_grid(self.footer_rows)
+
+    def _add_row(
+        self,
+        col0: str,
+        col1: str = "",
+        col2: str = "",
+        tooltip: str = "",
+        *,
+        grid: QGridLayout | None = None,
+    ) -> None:
+        target = self.rows if grid is None else grid
+        row = target.rowCount()
         for col, text in enumerate((col0, col1, col2)):
             if not text:
                 continue
@@ -93,7 +113,7 @@ class ProviderCard(QFrame):
             if tooltip and col == 2:
                 label.setToolTip(tooltip)
             align = Qt.AlignLeft if col == 0 else Qt.AlignRight
-            self.rows.addWidget(label, row, col, alignment=align | Qt.AlignVCenter)
+            target.addWidget(label, row, col, alignment=align | Qt.AlignVCenter)
 
     def update_snapshot(self, snap: ProviderSnapshot) -> None:
         self.title.setText(snap.provider)
@@ -132,6 +152,7 @@ class ProviderCard(QFrame):
             self._add_row(
                 f'<span style="color:{theme.TEXT_MUTED};">{key}</span>',
                 f'<span style="color:{theme.TEXT_SECONDARY};">{value}</span>',
+                grid=self.footer_rows if key in RENEWAL_KEYS else self.rows,
             )
 
 
