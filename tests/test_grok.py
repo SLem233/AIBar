@@ -204,13 +204,30 @@ def test_subscription_tier_becomes_the_plan(monkeypatch, auth):
     assert snap.windows[0].used_percent == pytest.approx(4.0)
 
 
-def test_live_answer_on_a_pooled_subscription_is_an_honest_dash(monkeypatch, auth):
+def _write_credits_log(path, percent=14.0, extra_lines=()):
+    """Строка CLI «billing: fetched credits config» — то, что пишет grok в unified.jsonl."""
+    rows = list(extra_lines)
+    rows.append(json.dumps({
+        "ts": "2026-08-19T05:57:17.826Z",
+        "msg": "billing: fetched credits config",
+        "ctx": {
+            "config": unified(percent=percent)["config"],
+            "subscriptionTier": "SuperGrok",
+        },
+    }, ensure_ascii=False))
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    return path
+
+
+def test_live_answer_on_a_pooled_subscription_is_an_honest_dash(monkeypatch, auth, tmp_path):
     """Что ручка отдаёт на самом деле (снято 17.08.2026, подписка SuperGrok).
 
     Лимит и история нулевые, процента нет. Ноль расхода и отсутствие данных
     выглядят одинаково, поэтому рисовать 0% нельзя — нужен прочерк с ошибкой.
+    Без лога CLI остаёмся на прочерке; процент из лога — отдельный тест.
     """
     auth(expired=False)
+    monkeypatch.setattr(grok, "_credits_log_path", lambda: tmp_path / "no-log.jsonl")
     live = {
         "config": {
             "monthlyLimit": {"val": 0},
@@ -231,6 +248,57 @@ def test_live_answer_on_a_pooled_subscription_is_an_honest_dash(monkeypatch, aut
     snap = grok.fetch({})
     assert snap.windows == []
     assert snap.error and "/usage" in snap.error
+
+
+def test_cli_log_fills_in_when_http_billing_has_no_window(monkeypatch, auth, tmp_path):
+    """HTTP на SuperGrok пустой, но CLI уже положил процент в unified.jsonl."""
+    auth(expired=False)
+    log = _write_credits_log(tmp_path / "unified.jsonl", percent=14.0)
+    monkeypatch.setattr(grok, "_credits_log_path", lambda: log)
+    live = {
+        "config": {
+            "monthlyLimit": {"val": 0},
+            "used": {"val": 0},
+            "onDemandCap": {"val": 0},
+            "billingPeriodStart": "2026-08-01T00:00:00+00:00",
+            "billingPeriodEnd": "2026-09-01T00:00:00+00:00",
+            "history": [],
+        }
+    }
+    monkeypatch.setattr(grok.requests, "get", oidc_get(FakeResp(200, payload=live)))
+    monkeypatch.setattr(grok.requests, "post", lambda *a, **kw: FakeResp(200, {}))
+    snap = grok.fetch({})
+    assert snap.error is None
+    assert snap.windows[0].used_percent == pytest.approx(14.0)
+    assert snap.windows[0].label == "Неделя"
+    assert snap.plan == "SuperGrok"
+
+
+def test_http_unified_percent_wins_over_stale_log(monkeypatch, auth, tmp_path):
+    auth(expired=False)
+    log = _write_credits_log(tmp_path / "unified.jsonl", percent=99.0)
+    monkeypatch.setattr(grok, "_credits_log_path", lambda: log)
+    monkeypatch.setattr(grok.requests, "get", oidc_get(FakeResp(200, payload=unified(percent=4.0))))
+    monkeypatch.setattr(grok.requests, "post", lambda *a, **kw: FakeResp(200, {}))
+    snap = grok.fetch({})
+    assert snap.windows[0].used_percent == pytest.approx(4.0)
+
+
+def test_credits_log_uses_the_last_billing_line(tmp_path):
+    log = _write_credits_log(
+        tmp_path / "unified.jsonl",
+        percent=14.0,
+        extra_lines=[
+            "not json",
+            json.dumps({"msg": "unrelated", "ctx": {"config": {"creditUsagePercent": 1}}}),
+            json.dumps({
+                "msg": "billing: fetched credits config",
+                "ctx": {"config": unified(percent=5.0)["config"]},
+            }),
+        ],
+    )
+    ctx = grok._latest_credits_from_log(log)
+    assert ctx["config"]["creditUsagePercent"] == 14.0
 
 
 def test_old_money_shape_still_works_after_the_switch():

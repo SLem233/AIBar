@@ -161,6 +161,43 @@ def _refresh(path: Path, entry: dict) -> str:
     return entry["key"]
 
 
+# ---- лог CLI --------------------------------------------------------------
+def _credits_log_path() -> Path:
+    """unified.jsonl, куда grok CLI пишет «billing: fetched credits config»."""
+    return Path.home() / ".grok" / "logs" / "unified.jsonl"
+
+
+def _latest_credits_from_log(path: Path | None = None) -> dict | None:
+    """Последний ctx биллинга из лога CLI. None — лога нет или схемы в нём нет.
+
+    HTTP `/v1/billing` на SuperGrok отдаёт нулевой лимит без процента. Сам CLI
+    тот же процент получает по WebSocket и кладёт в этот лог при старте сессии.
+    Читаем хвост файла: это не перехват трафика, а то, что CLI уже сохранил.
+    """
+    path = path or _credits_log_path()
+    if not path.is_file():
+        return None
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    chunk = raw[-262144:] if len(raw) > 262144 else raw
+    last = None
+    for line in chunk.decode("utf-8", errors="replace").splitlines():
+        if "fetched credits config" not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if obj.get("msg") != "billing: fetched credits config":
+            continue
+        ctx = obj.get("ctx")
+        if isinstance(ctx, dict) and isinstance(ctx.get("config"), dict):
+            last = ctx
+    return last
+
+
 # ---- биллинг --------------------------------------------------------------
 def _headers(token: str) -> dict:
     """Заголовки, с которыми реле принимает запрос (как у самого grok CLI)."""
@@ -308,6 +345,13 @@ def fetch(cfg: dict | None = None) -> ProviderSnapshot:
     renewal = subscription_renewal(cfg, "grok")
     if renewal:
         snap.extra["Продление"] = renewal
+    if not snap.windows:
+        # SuperGrok: HTTP без процента, CLI уже положил его в unified.jsonl.
+        logged = _latest_credits_from_log()
+        if logged:
+            _apply_billing(snap, logged.get("config") or {})
+            if not snap.plan and logged.get("subscriptionTier"):
+                snap.plan = str(logged["subscriptionTier"])
     if not snap.windows:
         # Ни процента, ни лимита — значит формат снова поехал. Не молчим и не
         # рисуем ноль: ноль расхода и отсутствие данных выглядят одинаково.
