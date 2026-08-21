@@ -301,6 +301,95 @@ def test_credits_log_uses_the_last_billing_line(tmp_path):
     assert ctx["config"]["creditUsagePercent"] == 14.0
 
 
+def _credits_line(ctx: dict, ts: str = "2026-08-21T07:04:56.835Z") -> str:
+    return json.dumps(
+        {"ts": ts, "msg": "billing: fetched credits config", "ctx": ctx},
+        ensure_ascii=False,
+    )
+
+
+def _period_only(start: str, end: str) -> dict:
+    """Первая сессия дня: CLI пишет границы окна, процент ещё не положил."""
+    cfg = {k: v for k, v in unified(start=start, end=end)["config"].items()
+           if k != "creditUsagePercent"}
+    return {"config": cfg, "subscriptionTier": "SuperGrok"}
+
+
+def _empty_http():
+    return {
+        "config": {
+            "monthlyLimit": {"val": 0},
+            "used": {"val": 0},
+            "onDemandCap": {"val": 0},
+            "billingPeriodStart": "2026-08-01T00:00:00+00:00",
+            "billingPeriodEnd": "2026-09-01T00:00:00+00:00",
+            "history": [],
+        }
+    }
+
+
+def test_first_session_of_the_day_without_percent_is_not_an_error(monkeypatch, auth, tmp_path):
+    """Баг приёмки: первая сессия дня пишет период без creditUsagePercent.
+
+    Берём процент из предыдущей полной строки, ошибку «нет ни процента, ни
+    лимита» не показываем. Вторая сессия дня кладёт процент сама — как сейчас.
+    """
+    auth(expired=False)
+    same = ("2026-08-13T18:38:30.938252+00:00", "2026-08-20T18:38:30.938252+00:00")
+    log = tmp_path / "unified.jsonl"
+    log.write_text(
+        "\n".join([
+            _credits_line({"config": unified(percent=94.0, start=same[0], end=same[1])["config"],
+                           "subscriptionTier": "SuperGrok"}, ts="2026-08-20T08:18:20Z"),
+            _credits_line(_period_only(*same), ts="2026-08-21T07:04:56Z"),
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(grok, "_credits_log_path", lambda: log)
+    monkeypatch.setattr(grok.requests, "get", oidc_get(FakeResp(200, payload=_empty_http())))
+    monkeypatch.setattr(grok.requests, "post", lambda *a, **kw: FakeResp(200, {}))
+    snap = grok.fetch({})
+    assert snap.error is None
+    assert snap.windows[0].used_percent == pytest.approx(94.0)
+    assert snap.windows[0].resets_at.day == 20
+
+
+def test_new_week_without_percent_takes_the_new_reset_not_stale_94(monkeypatch, auth, tmp_path):
+    """После смены недели CLI пишет новые start/end, процент — со второй сессии.
+
+    Старые 94% к новому окну не приклеиваем: пул сброшен. Дата сброса — из
+    нового currentPeriod.end, кольцо пока 0%, без плашки ошибки.
+    """
+    auth(expired=False)
+    log = tmp_path / "unified.jsonl"
+    log.write_text(
+        "\n".join([
+            _credits_line({
+                "config": unified(
+                    percent=94.0,
+                    start="2026-08-13T18:38:30.938252+00:00",
+                    end="2026-08-20T18:38:30.938252+00:00",
+                )["config"],
+                "subscriptionTier": "SuperGrok",
+            }, ts="2026-08-20T08:18:20Z"),
+            _credits_line(_period_only(
+                "2026-08-20T18:38:30.938252+00:00",
+                "2026-08-27T18:38:30.938252+00:00",
+            ), ts="2026-08-21T07:04:56Z"),
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(grok, "_credits_log_path", lambda: log)
+    monkeypatch.setattr(grok.requests, "get", oidc_get(FakeResp(200, payload=_empty_http())))
+    monkeypatch.setattr(grok.requests, "post", lambda *a, **kw: FakeResp(200, {}))
+    snap = grok.fetch({})
+    assert snap.error is None
+    assert snap.windows[0].used_percent == pytest.approx(0.0)
+    assert snap.windows[0].label == "Неделя"
+    assert snap.windows[0].resets_at.day == 27
+    assert snap.plan == "SuperGrok"
+
+
 def test_old_money_shape_still_works_after_the_switch():
     """Аккаунты без unified billing никуда не делись — старый разбор оставлен."""
     snap = ProviderSnapshot(provider="Grok")
