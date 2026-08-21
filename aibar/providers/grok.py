@@ -167,12 +167,30 @@ def _credits_log_path() -> Path:
     return Path.home() / ".grok" / "logs" / "unified.jsonl"
 
 
+def _has_usage(config: dict) -> bool:
+    """Можно ли из config нарисовать окно: процент пула или денежный лимит."""
+    if config.get("creditUsagePercent") is not None:
+        return True
+    limit = (config.get("monthlyLimit") or {}).get("val")
+    used = (config.get("used") or {}).get("val")
+    return bool(limit) and used is not None
+
+
+def _period_end(config: dict) -> str | None:
+    period = config.get("currentPeriod") or {}
+    return period.get("end") or config.get("billingPeriodEnd")
+
+
 def _latest_credits_from_log(path: Path | None = None) -> dict | None:
-    """Последний ctx биллинга из лога CLI. None — лога нет или схемы в нём нет.
+    """Последний полезный ctx биллинга из лога CLI.
 
     HTTP `/v1/billing` на SuperGrok отдаёт нулевой лимит без процента. Сам CLI
     тот же процент получает по WebSocket и кладёт в этот лог при старте сессии.
     Читаем хвост файла: это не перехват трафика, а то, что CLI уже сохранил.
+
+    Первая сессия дня часто пишет только границы окна, без `creditUsagePercent`.
+    Берём последнюю строку, из которой вообще можно нарисовать окно; если после
+    неё пришёл новый период без процента — это сброс пула, не «данных нет».
     """
     path = path or _credits_log_path()
     if not path.is_file():
@@ -182,7 +200,8 @@ def _latest_credits_from_log(path: Path | None = None) -> dict | None:
     except OSError:
         return None
     chunk = raw[-262144:] if len(raw) > 262144 else raw
-    last = None
+    last_any = None
+    last_complete = None
     for line in chunk.decode("utf-8", errors="replace").splitlines():
         if "fetched credits config" not in line:
             continue
@@ -193,9 +212,22 @@ def _latest_credits_from_log(path: Path | None = None) -> dict | None:
         if obj.get("msg") != "billing: fetched credits config":
             continue
         ctx = obj.get("ctx")
-        if isinstance(ctx, dict) and isinstance(ctx.get("config"), dict):
-            last = ctx
-    return last
+        if not isinstance(ctx, dict) or not isinstance(ctx.get("config"), dict):
+            continue
+        last_any = ctx
+        if _has_usage(ctx["config"]):
+            last_complete = ctx
+    if last_complete is None:
+        return last_any
+    if last_any is last_complete:
+        return last_complete
+    new_end = _period_end(last_any["config"])
+    old_end = _period_end(last_complete["config"])
+    if new_end and new_end != old_end:
+        config = dict(last_any["config"])
+        config["creditUsagePercent"] = 0.0
+        return {**last_any, "config": config}
+    return last_complete
 
 
 # ---- биллинг --------------------------------------------------------------
