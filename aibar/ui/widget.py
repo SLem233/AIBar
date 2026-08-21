@@ -281,15 +281,19 @@ class DesktopWidget(QWidget):
             for s in self._snapshots
             if any(w.used_percent >= self._mini_threshold for w in s.windows)
         }
-        if hot:
-            return hot
-        # nobody is close to the limit — show the most recently active provider
         delta = self._activity_delta()
         if delta:
             self._last_solo = max(delta, key=delta.get)
-        if self._last_solo not in self._tiles:
-            self._last_solo = next(iter(self._tiles), None)
-        return {self._last_solo} if self._last_solo else set()
+        visible = set(hot)
+        if self._last_solo in self._tiles:
+            visible.add(self._last_solo)
+        if not visible:
+            # ни горячих, ни роста — одна плитка, чтобы кадр не опустел
+            first = next(iter(self._tiles), None)
+            if first:
+                self._last_solo = first
+                visible.add(first)
+        return visible
 
     def _apply_visibility(self) -> None:
         if not self._tiles:
