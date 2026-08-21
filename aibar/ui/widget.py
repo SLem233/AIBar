@@ -43,6 +43,7 @@ class DesktopWidget(QWidget):
     geometry_changed = Signal()
     refresh_requested = Signal()
     settings_requested = Signal()
+    stats_requested = Signal()
     help_requested = Signal()
     hide_requested = Signal()
     quit_requested = Signal()
@@ -280,15 +281,19 @@ class DesktopWidget(QWidget):
             for s in self._snapshots
             if any(w.used_percent >= self._mini_threshold for w in s.windows)
         }
-        if hot:
-            return hot
-        # nobody is close to the limit — show the most recently active provider
         delta = self._activity_delta()
         if delta:
             self._last_solo = max(delta, key=delta.get)
-        if self._last_solo not in self._tiles:
-            self._last_solo = next(iter(self._tiles), None)
-        return {self._last_solo} if self._last_solo else set()
+        visible = set(hot)
+        if self._last_solo in self._tiles:
+            visible.add(self._last_solo)
+        if not visible:
+            # ни горячих, ни роста — одна плитка, чтобы кадр не опустел
+            first = next(iter(self._tiles), None)
+            if first:
+                self._last_solo = first
+                visible.add(first)
+        return visible
 
     def _apply_visibility(self) -> None:
         if not self._tiles:
@@ -422,6 +427,8 @@ class DesktopWidget(QWidget):
             "Прижатый к краю виджет уезжает за край, оставляя тонкую полоску"
         )
         autohide.toggled.connect(self.autohide_changed)
+        stats = QAction("Статистика", menu)
+        stats.triggered.connect(self.stats_requested)
         settings = QAction("Настройки…", menu)
         settings.triggered.connect(self.settings_requested)
         help_action = QAction("Справка", menu)
@@ -433,6 +440,7 @@ class DesktopWidget(QWidget):
         menu.addAction(refresh)
         menu.addAction(mini)
         menu.addAction(autohide)
+        menu.addAction(stats)
         menu.addAction(settings)
         menu.addAction(help_action)
         menu.addAction(hide)
