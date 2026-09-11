@@ -22,7 +22,7 @@ machine shows honest network errors instead of a misleading "no VPN".
 import requests
 
 # Providers that are unreachable without VPN (share one geo-block).
-GATED_PROVIDERS = {"Claude", "Codex", "OpenAI API"}
+GATED_PROVIDERS = {"Claude", "Codex", "Codex Пул", "OpenAI API"}
 
 # Anonymous, cheap, geo-blocked at the edge. Order = preference: the
 # anthropic root answers a tiny 404 when reachable and is not rate-limited.

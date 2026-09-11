@@ -91,6 +91,7 @@
 |-----------|----------------------|-----|
 | Claude (Claude Code) | `~/.claude/.credentials.json` | `api.anthropic.com/api/oauth/usage` |
 | Codex (ChatGPT) | `~/.codex/auth.json` | `chatgpt.com/backend-api/wham/usage` |
+| Codex Пул (opencodex) | `~/.opencodex/codex-accounts.json` | тот же `wham/usage` по каждому аккаунту пула |
 | Cursor | `%APPDATA%\Cursor\...\state.vscdb` | `cursor.com/api/usage-summary` |
 | Z.ai / zcode | API-ключ в настройках или `Z_AI_API_KEY` | `api.z.ai/api/monitor/usage/quota/limit` |
 | Kimi (Moonshot) | API-ключ coding-плана или `KIMI_API_KEY` | `api.kimi.com/coding/v1/usages` |
@@ -278,6 +279,7 @@ aibar/
 │   ├── base.py        # модель данных (RateWindow, ProviderSnapshot)
 │   ├── claude.py      # Claude OAuth usage
 │   ├── codex.py       # Codex (ChatGPT backend) usage
+│   ├── codex_pool.py  # Codex Пул: аккаунты opencodex
 │   ├── cursor.py      # Cursor (usage-summary)
 │   ├── zai.py         # Z.ai coding plan (zcode)
 │   ├── kimi.py        # Kimi coding plan (Moonshot)

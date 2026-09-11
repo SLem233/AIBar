@@ -67,6 +67,22 @@ def _migrate(data: dict) -> dict:
             while candidate.day != int(day):  # next occurrence of that day
                 candidate += timedelta(days=1)
             data[f"{prefix}_renewal_date"] = candidate.strftime("%d.%m.%Y")
+
+    # One-time: users tracking Codex with an opencodex account pool get the
+    # pool provider enabled next to Codex (their extra accounts would be
+    # invisible otherwise). The marker keeps this from re-adding the provider
+    # after the user deliberately removes it in settings.
+    if "codex_pool_seen" not in data:
+        data["codex_pool_seen"] = True
+        providers = data.get("providers") or (["Claude", "Codex"] if "providers" not in data else [])
+        if (
+            "Codex" in providers
+            and "Codex Пул" not in providers
+            and (Path.home() / ".opencodex" / "codex-accounts.json").exists()
+        ):
+            providers = list(providers)
+            providers.insert(providers.index("Codex") + 1, "Codex Пул")
+            data["providers"] = providers
     return data
 
 

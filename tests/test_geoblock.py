@@ -55,8 +55,9 @@ def test_probe_status_none_on_network_error(monkeypatch):
 
 # ---- detector cascade -----------------------------------------------------
 
-def test_gated_providers_are_the_three_vpn_dependent_ones():
-    assert GATED_PROVIDERS == {"Claude", "Codex", "OpenAI API"}
+def test_gated_providers_are_the_vpn_dependent_ones():
+    # Codex Пул идёт в тот же chatgpt.com/backend-api, что и Codex
+    assert GATED_PROVIDERS == {"Claude", "Codex", "Codex Пул", "OpenAI API"}
 
 
 def test_403_on_first_detector_means_blocked():
